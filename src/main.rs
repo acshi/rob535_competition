@@ -196,7 +196,9 @@ fn copy_mat(n: usize, a: &mut [f64], row: usize, col: usize, m: usize, b: &[f64]
 
 fn mpc_ltv<F, G>(a_fun: &F, b_fun: &G, q: &[f64], r: &[f64], t_span: &[f64],
                  horizon: usize, a_x_constraints: &[f64], b_x_constraints: &[f64],
-                 a_u_constraints: &[f64], b_u_constraints: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
+                 a_u_constraints: &[f64], b_u_constraints: &[f64],
+                 x_lb: &[f64], x_ub: &[f64],
+                 u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
 where F: Fn(usize, &mut [f64]),
       G: Fn(usize, &mut [f64]) {
     let n = x0.len();
@@ -251,10 +253,25 @@ where F: Fn(usize, &mut [f64]),
         copy_mat(1, &mut b_ineq, row, 0, 1, &b_u_constraints);
     }
 
-    // set bounds to infinity
+    // set bounds to infinities for the default
     let cplex_inf = 1.0e+20;
-    let lb = vec![-cplex_inf; n_dec];
-    let ub = vec![cplex_inf; n_dec];
+    let mut lb = vec![-cplex_inf; n_dec];
+    let mut ub = vec![cplex_inf; n_dec];
+
+    assert_eq!(x_lb.len(), n);
+    assert_eq!(x_ub.len(), n);
+    assert_eq!(u_lb.len(), m);
+    assert_eq!(u_ub.len(), m);
+
+    for i in 0..horizon {
+        lb[n*i..n*i+n].copy_from_slice(x_lb);
+        ub[n*i..n*i+n].copy_from_slice(x_ub);
+    }
+    for i in 0..horizon-1 {
+        let idx = n * horizon + m * i;
+        lb[idx..idx+m].copy_from_slice(u_lb);
+        ub[idx..idx+m].copy_from_slice(u_ub);
+    }
 
     // Finally, for each time step, we set up equality constraints on the states
     // (only as far as our forward horizon)
@@ -419,13 +436,24 @@ fn mpc_test() {
     let r = vec![0.1];
 
     let horizon = 100;
-    let a_x_constraints = vec![1., 0., -1., 0., 0., 1., 0., -1.]; // vec![1., -1., 0., 0., 0., 0., 1., -1.];
-    let b_x_constraints = vec![2., 2., 2., 2.];
-    let a_u_constraints = vec![1., -1.];
-    let b_u_constraints = vec![10., 10.];
+    // let a_x_constraints = vec![1., 0., -1., 0., 0., 1., 0., -1.];
+    // let b_x_constraints = vec![2., 2., 2., 2.];
+    // let a_u_constraints = vec![1., -1.];
+    // let b_u_constraints = vec![10., 10.];
+    let a_x_constraints = vec![];
+    let b_x_constraints = vec![];
+    let a_u_constraints = vec![];
+    let b_u_constraints = vec![];
+
+    let x_lb = vec![-2., -2.];
+    let x_ub = vec![2., 2.];
+    let u_lb = vec![-10.];
+    let u_ub = vec![10.];
 
     let start_time = precise_time_s();
-    let (xs, _) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon, &a_x_constraints, &b_x_constraints, &a_u_constraints, &b_u_constraints, &x0);
+    let (xs, _) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon,
+                          &a_x_constraints, &b_x_constraints, &a_u_constraints, &b_u_constraints,
+                          &x_lb, &x_ub, &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
 
     if true {
