@@ -26,14 +26,14 @@ int quadprog(size_t n, double *H, double *f,
     if (cplex_check_error(env, status)) { return status; }
 
     // screen update thing
-    // status = CPXsetintparam(env, CPXPARAM_ScreenOutput, CPX_ON);
-    // if (cplex_check_error(env, status)) { return status; }
+    status = CPXsetintparam(env, CPXPARAM_ScreenOutput, CPX_ON);
+    if (cplex_check_error(env, status)) { return status; }
 
     // data checking (not sure what for)
-    // status = CPXsetintparam(env, CPXPARAM_Read_DataCheck, CPX_DATACHECK_WARN);
-    // if (cplex_check_error(env, status)) { return status; }
+    status = CPXsetintparam(env, CPXPARAM_Read_DataCheck, CPX_DATACHECK_WARN);
+    if (cplex_check_error(env, status)) { return status; }
 
-    CPXLPptr qp = CPXcreateprob(env, &status, "Test QP");
+    CPXLPptr qp = CPXcreateprob(env, &status, "One-Step QP");
     if (cplex_check_error(env, status)) { return status; }
 
     // set to minimization problem
@@ -41,7 +41,7 @@ int quadprog(size_t n, double *H, double *f,
     if (cplex_check_error(env, status)) { return status; }
 
     // Set the linear part of the objective function and inform CPLEX
-    // about the number of varialbes (columns) that we are using
+    // about the number of variables (columns) that we are using
     status = CPXnewcols(env, qp, n, f, lb, ub, NULL, NULL);
     if (cplex_check_error(env, status)) { return status; }
 
@@ -125,5 +125,215 @@ int quadprog(size_t n, double *H, double *f,
     status = CPXcloseCPLEX(&env);
     if (cplex_check_error(env, status)) { return status; }
 
-    return solstat;
+    // 1 indicates a solution
+    // translate to 0 as the error code for "no error"
+    if (solstat == 1) {
+        return 0;
+    }
+    return -1;
+}
+
+int qp_create(size_t n, double *f, double *lb, double *ub, size_t n_le, size_t n_eq, CPXENVptr *env_out, CPXLPptr *qp_out) {
+    int status = 0;
+    CPXENVptr env = CPXopenCPLEX(&status);
+    if (cplex_check_error(env, status)) { return status; }
+
+    // screen update thing
+    status = CPXsetintparam(env, CPXPARAM_ScreenOutput, CPX_ON);
+    if (cplex_check_error(env, status)) { return status; }
+
+    // data checking (not sure what for)
+    status = CPXsetintparam(env, CPXPARAM_Read_DataCheck, CPX_DATACHECK_WARN);
+    if (cplex_check_error(env, status)) { return status; }
+
+    CPXLPptr qp = CPXcreateprob(env, &status, "Full QP");
+    if (cplex_check_error(env, status)) { return status; }
+
+    // set to minimization problem
+    status = CPXchgobjsen(env, qp, CPX_MIN);
+    if (cplex_check_error(env, status)) { return status; }
+
+    // Set the linear part of the objective function and inform CPLEX
+    // about the number of variables (columns) that we are using
+    status = CPXnewcols(env, qp, n, f, lb, ub, NULL, NULL);
+    if (cplex_check_error(env, status)) { return status; }
+
+    if (n_le > 0) {
+        char *sense = malloc(sizeof(char) * n_le);
+        for (int i = 0; i < n_le; i++) {
+            sense[i] = 'L';
+        }
+        status = CPXnewrows(env, qp, n_le, NULL, sense, NULL, NULL);
+        free(sense);
+        if (cplex_check_error(env, status)) { return status; }
+    }
+
+    if (n_eq > 0) {
+        char *sense = malloc(sizeof(char) * n_eq);
+        for (int i = 0; i < n_eq; i++) {
+            sense[i] = 'E';
+        }
+        status = CPXnewrows(env, qp, n_eq, NULL, sense, NULL, NULL);
+        free(sense);
+        if (cplex_check_error(env, status)) { return status; }
+    }
+
+    *env_out = env;
+    *qp_out = qp;
+
+    return 0;
+}
+
+int qp_diagonal_quadratic_cost(CPXENVptr env, CPXLPptr qp, double *q_diag) {
+    return CPXcopyqpsep(env, qp, q_diag);
+}
+
+int qp_dense_quadratic_cost(CPXENVptr env, CPXLPptr qp, double *q) {
+    // The full MATLAB quadprog does not allow sparse representation so we specify that here
+    // and we use H directly as qmatval
+    int n = CPXgetnumcols(env, qp);
+    int *qmatbeg = malloc(sizeof(int) * n);
+    int *qmatcnt = malloc(sizeof(int) * n);
+    int *qmatind = malloc(sizeof(int) * n * n);
+    for (int i = 0; i < n; i++) {
+        qmatbeg[i] = i * n;
+        qmatcnt[i] = n;
+        for (int j = 0; j < n; j++) {
+            qmatind[i * n + j] = j;
+        }
+    }
+    int status = CPXcopyquad(env, qp, qmatbeg, qmatcnt, qmatind, q);
+    free(qmatbeg);
+    free(qmatcnt);
+    free(qmatind);
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
+}
+
+int qp_sparse_quadratic_cost(CPXENVptr env, CPXLPptr qp, int *coefs_per_row, int *column_indices, double *q) {
+    int n = CPXgetnumcols(env, qp);
+    int *qmatbeg = malloc(sizeof(int) * n);
+    int offset = 0;
+    for (int i = 0; i < n; i++) {
+        qmatbeg[i] = offset;
+        offset += coefs_per_row[i];
+    }
+    int status = CPXcopyquad(env, qp, qmatbeg, coefs_per_row, column_indices, q);
+    free(qmatbeg);
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
+}
+
+int qp_dense_le_constraints(CPXENVptr env, CPXLPptr qp, int n_le, double *coefs, double *rhs) {
+    // we organize the <= constraints first in the list
+    // so this is just a direct call
+    int n = CPXgetnumcols(env, qp);
+    int *constraint_indices = malloc(sizeof(int) * n  * n_le);
+    int *column_indices = malloc(sizeof(int) * n  * n_le);
+    int idx = 0;
+    for (int i = 0; i < n_le; i++) {
+        for (int j = 0; j < n; j++) {
+            constraint_indices[idx] = i;
+            column_indices[idx] = j;
+            idx++;
+        }
+    }
+    int status = CPXchgcoeflist(env, qp, n * n_le, constraint_indices, column_indices, coefs);
+    if (status == 0) {
+        for (int i = 0; i < n_le; i++) {
+            constraint_indices[i] = i;
+            column_indices[i] = -1;
+        }
+        status = CPXchgcoeflist(env, qp, n_le, constraint_indices, column_indices, rhs);
+    }
+    free(constraint_indices);
+    free(column_indices);
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
+}
+
+int qp_sparse_le_constraints(CPXENVptr env, CPXLPptr qp, int n_le, int n_coefs, int *constraint_indices, int *column_indices, double *coefs) {
+    // we organize the <= constraints first in the list
+    // so this is just a direct call
+    int status = CPXchgcoeflist(env, qp, n_coefs, constraint_indices, column_indices, coefs);
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
+}
+
+int qp_dense_eq_constraints(CPXENVptr env, CPXLPptr qp, int n_eq, double *coefs, double *rhs) {
+    // we organize the == constraints after then <= ones
+    // so we have to offset by the number of <= constraints
+    int n_le = CPXgetnumrows(env, qp) - n_eq;
+    int n = CPXgetnumcols(env, qp);
+    int *constraint_indices = malloc(sizeof(int) * n * n_eq);
+    int *column_indices = malloc(sizeof(int) * n * n_eq);
+    int idx = 0;
+    for (int i = 0; i < n_eq; i++) {
+        for (int j = 0; j < n; j++) {
+            constraint_indices[idx] = i + n_le;
+            column_indices[idx] = j;
+            idx++;
+        }
+    }
+    int status = CPXchgcoeflist(env, qp, n * n_eq, constraint_indices, column_indices, coefs);
+    if (status == 0) {
+        for (int i = 0; i < n_eq; i++) {
+            constraint_indices[i] = i + n_le;
+            column_indices[i] = -1;
+        }
+        status = CPXchgcoeflist(env, qp, n_eq, constraint_indices, column_indices, rhs);
+    }
+    free(constraint_indices);
+    free(column_indices);
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
+}
+
+// the right-hand side should be included with column indices of -1.
+int qp_sparse_eq_constraints(CPXENVptr env, CPXLPptr qp, int n_eq, int n_coefs, int *constraint_indices, int *column_indices, double *coefs) {
+    // we organize the == constraints after then <= ones
+    // so we have to offset by the number of <= constraints
+    int n_le = CPXgetnumrows(env, qp) - n_eq;
+    for (int i = 0; i < n_eq; i++) {
+        constraint_indices[i] += n_le;
+    }
+    int status = CPXchgcoeflist(env, qp, n_coefs, constraint_indices, column_indices, coefs);
+    for (int i = 0; i < n_eq; i++) {
+        constraint_indices[i] -= n_le;
+    }
+
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
+}
+
+int qp_run(CPXENVptr env, CPXLPptr qp, double *obj_val, double *x_out) {
+    int status = CPXqpopt(env, qp);
+    if (cplex_check_error(env, status)) { return status; }
+
+    int solstat;
+    status = CPXsolution(env, qp, &solstat, obj_val, x_out, NULL, NULL, NULL);
+    if (cplex_check_error(env, status)) { return status; }
+
+    // 1 indicates a solution
+    // translate to 0 as the error code for "no error"
+    if (solstat == 1) {
+        return 0;
+    }
+    return -1;
+}
+
+int qp_destroy(CPXENVptr env, CPXLPptr qp) {
+    int status = CPXfreeprob(env, &qp);
+    if (cplex_check_error(env, status)) { return status; }
+
+    status = CPXcloseCPLEX(&env);
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
 }

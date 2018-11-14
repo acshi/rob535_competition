@@ -44,7 +44,7 @@ fn solve_quadprog(h_mat: &[f64], f: &[f64],
                               n_eq as size_t, a_eq_mat.as_ptr(), b_eq.as_ptr(),
                               lb.as_ptr(), ub.as_ptr(),
                               &mut obj_val, x.as_mut_ptr());
-        if status != 1 {
+        if status != 0 {
             return None;
         }
     }
