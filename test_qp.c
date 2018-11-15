@@ -15,9 +15,9 @@ double ub[] = {1, 1, 1};
 double obj_val = 0;
 double x[] = {0, 0, 0};
 
-int quadprog(size_t n, double *H, double *f,
-             size_t n_le, double *A, double *b,
-             size_t n_eq, double *Aeq, double *beq,
+int quadprog(int n, double *H, double *f,
+             int n_le, double *A, double *b,
+             int n_eq, double *Aeq, double *beq,
              double *lb, double *ub,
              double *obj_val, double *x_out);
 
@@ -27,16 +27,16 @@ typedef struct CPXENV* CPXENVptr;
 struct CPXLP;
 typedef struct CPXLP* CPXLPptr;
 
-int qp_create(size_t n, double *f, double *lb, double *ub,
-              size_t n_le, size_t n_eq,
+int qp_create(int n, double *f, double *lb, double *ub,
+              int n_le, int n_eq,
               CPXENVptr *env_out, CPXLPptr *qp_out);
 
 int qp_diagonal_quadratic_cost(CPXENVptr env, CPXLPptr qp, double *q_diag);
 int qp_dense_quadratic_cost(CPXENVptr env, CPXLPptr qp, double *q);
 int qp_dense_le_constraints(CPXENVptr env, CPXLPptr qp, int n_le, double *coefs, double *rhs);
-int qp_sparse_le_constraints(CPXENVptr env, CPXLPptr qp, int n_le, int n_coefs, int *constraint_indices, int *column_indices, double *coefs);
+int qp_sparse_le_constraints(CPXENVptr env, CPXLPptr qp, int n_le, int n_coefs, int *constraint_indices, int *column_indices, double *coefs, double *rhs);
 int qp_dense_eq_constraints(CPXENVptr env, CPXLPptr qp, int n_eq, double *coefs, double *rhs);
-int qp_sparse_eq_constraints(CPXENVptr env, CPXLPptr qp, int n_eq, int n_coefs, int *constraint_indices, int *column_indices, double *coefs);
+int qp_sparse_eq_constraints(CPXENVptr env, CPXLPptr qp, int n_eq, int n_coefs, int *constraint_indices, int *column_indices, double *coefs, double *rhs);
 int qp_run(CPXENVptr env, CPXLPptr qp, double *obj_val, double *x_out);
 int qp_destroy(CPXENVptr env, CPXLPptr qp);
 
@@ -72,7 +72,7 @@ void test2() {
 }
 
 int main(int argc, char** argv) {
-    // test1();
-    test2();
+    test1();
+    // test2();
     return 0;
 }

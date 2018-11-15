@@ -1,5 +1,6 @@
 extern crate libc;
-use libc::size_t;
+use libc::c_void;
+use std::ptr;
 
 extern crate lapack;
 extern crate blas;
@@ -15,13 +16,159 @@ extern crate time;
 use time::precise_time_s;
 
 #[link(name = "cplex", kind = "static")]
-#[link(name = "cplexqp", kind = "static")]
+#[link(name = "cplexrust", kind = "static")]
+#[allow(dead_code)]
 extern {
-    fn quadprog(n: size_t, H: *const f64, f: *const f64,
-                n_le: size_t, A: *const f64, b: *const f64,
-                n_eq: size_t, A_eq: *const f64, b_eq: *const f64,
+    fn quadprog(n: i32, H: *const f64, f: *const f64,
+                n_le: i32, A: *const f64, b: *const f64,
+                n_eq: i32, A_eq: *const f64, b_eq: *const f64,
                 lb: *const f64, ub: *const f64,
                 obj_val: *mut f64, x_out: *mut f64) -> i32;
+
+    fn qp_create(n: i32, f: *const f64, lb: *const f64, ub: *const f64,
+                  n_le: i32, n_eq: i32,
+                  env_out: *mut *mut c_void, qp_out: *mut *mut c_void) -> i32;
+
+    fn qp_diagonal_quadratic_cost(env: *mut c_void, qp: *mut c_void, q_diag: *const f64) -> i32;
+    fn qp_dense_quadratic_cost(env: *mut c_void, qp: *mut c_void, q: *const f64) -> i32;
+    fn qp_dense_le_constraints(env: *mut c_void, qp: *mut c_void, n_le: i32, coefs: *const f64, rhs: *const f64) -> i32;
+    fn qp_sparse_le_constraints(env: *mut c_void, qp: *mut c_void, n_le: i32, n_coefs: i32,
+                                constraint_indices: *const i32, column_indices: *const i32,
+                                coefs: *const f64, rhs: *const f64) -> i32;
+    fn qp_dense_eq_constraints(env: *mut c_void, qp: *mut c_void, n_eq: i32, coefs: *const f64, rhs: *const f64) -> i32;
+    fn qp_sparse_eq_constraints(env: *mut c_void, qp: *mut c_void, n_eq: i32, n_coefs: i32,
+                                constraint_indices: *const i32, column_indices: *const i32,
+                                coefs: *const f64, rhs: *const f64) -> i32;
+    fn qp_run(env: *mut c_void, qp: *mut c_void, obj_val: *mut f64, x_out: *mut f64) -> i32;
+    fn qp_destroy(env: *mut c_void, qp: *mut c_void) -> i32;
+}
+
+#[allow(dead_code)]
+struct QuadProg {
+    env: *mut c_void,
+    qp: *mut c_void,
+    n: i32,
+    n_le: i32,
+    n_eq: i32,
+}
+
+#[allow(dead_code)]
+impl QuadProg {
+    fn new(n: usize, f: &[f64], lb: &[f64], ub: &[f64], n_le: usize, n_eq: usize) -> QuadProg {
+        assert_eq!(f.len(), n);
+        assert_eq!(lb.len(), n);
+        assert_eq!(ub.len(), n);
+
+        let n = n as i32;
+        let n_le = n_le as i32;
+        let n_eq = n_eq as i32;
+
+        let mut env = ptr::null_mut();
+        let mut qp = ptr::null_mut();
+        unsafe {
+            let status = qp_create(n, f.as_ptr(), lb.as_ptr(), ub.as_ptr(), n_le, n_eq, &mut env, &mut qp);
+            if status != 0 {
+                panic!();
+            }
+        }
+        QuadProg { env, qp, n, n_le, n_eq }
+    }
+
+    fn diagonal_quadratic_cost(&mut self, q_diag: &[f64]) {
+        assert_eq!(q_diag.len(), self.n as usize);
+        unsafe {
+            let status = qp_diagonal_quadratic_cost(self.env, self.qp, q_diag.as_ptr());
+            if status != 0 {
+                panic!();
+            }
+        }
+    }
+
+    fn dense_quadratic_cost(&mut self, q: &[f64]) {
+        assert_eq!(q.len(), (self.n * self.n) as usize);
+        unsafe {
+            let status = qp_dense_quadratic_cost(self.env, self.qp, q.as_ptr());
+            if status != 0 {
+                panic!();
+            }
+        }
+    }
+
+    fn dense_le_constraints(&mut self, coefs: &[f64], rhs: &[f64]) {
+        assert_eq!(coefs.len(), (self.n * self.n_le) as usize);
+        assert_eq!(rhs.len(), self.n_le as usize);
+        unsafe {
+            let status = qp_dense_le_constraints(self.env, self.qp, self.n_le, coefs.as_ptr(), rhs.as_ptr());
+            if status != 0 {
+                panic!();
+            }
+        }
+    }
+
+    fn sparse_le_constraints(&mut self, constraint_idxs: &[i32], column_idxs: &[i32], coefs: &[f64], rhs: &[f64]) {
+        let n_coefs = coefs.len();
+        assert_eq!(constraint_idxs.len(), n_coefs);
+        assert_eq!(column_idxs.len(), n_coefs);
+        assert_eq!(rhs.len(), self.n_le as usize);
+        unsafe {
+            let status = qp_sparse_le_constraints(self.env, self.qp, self.n_le, n_coefs as i32,
+                                                  constraint_idxs.as_ptr(), column_idxs.as_ptr(),
+                                                  coefs.as_ptr(), rhs.as_ptr());
+            if status != 0 {
+                panic!();
+            }
+        }
+    }
+
+    fn dense_eq_constraints(&mut self, coefs: &[f64], rhs: &[f64]) {
+        assert_eq!(coefs.len(), (self.n * self.n_eq) as usize);
+        assert_eq!(rhs.len(), self.n_eq as usize);
+        unsafe {
+            let status = qp_dense_eq_constraints(self.env, self.qp, self.n_eq, coefs.as_ptr(), rhs.as_ptr());
+            if status != 0 {
+                panic!();
+            }
+        }
+    }
+
+    fn sparse_eq_constraints(&mut self, constraint_idxs: &[i32], column_idxs: &[i32], coefs: &[f64], rhs: &[f64]) {
+        let n_coefs = coefs.len();
+        assert_eq!(constraint_idxs.len(), n_coefs);
+        assert_eq!(column_idxs.len(), n_coefs);
+        assert_eq!(rhs.len(), self.n_eq as usize);
+        unsafe {
+            let status = qp_sparse_eq_constraints(self.env, self.qp, self.n_eq, n_coefs as i32,
+                                                 constraint_idxs.as_ptr(), column_idxs.as_ptr(),
+                                                 coefs.as_ptr(), rhs.as_ptr());
+            if status != 0 {
+                panic!();
+            }
+        }
+    }
+
+    // even on failure, xs may be mutated
+    fn run(&mut self, xs: &mut [f64]) -> Option<f64> {
+        assert_eq!(xs.len(), self.n as usize);
+        unsafe {
+            let mut obj_val = 0.0;
+            let status = qp_run(self.env, self.qp, &mut obj_val, xs.as_mut_ptr());
+            if status == 0 {
+                return Some(obj_val);
+            }
+        }
+        None
+    }
+}
+
+impl Drop for QuadProg {
+    fn drop(&mut self) {
+        unsafe {
+            let status = qp_destroy(self.env, self.qp);
+            if status != 0 {
+                panic!();
+            }
+        }
+    }
 }
 
 fn solve_quadprog(h_mat: &[f64], f: &[f64],
@@ -39,9 +186,9 @@ fn solve_quadprog(h_mat: &[f64], f: &[f64],
     let mut x = vec![0.0; n];
     let mut obj_val = 0.0;
     unsafe {
-        let status = quadprog(n as size_t, h_mat.as_ptr(), f.as_ptr(),
-                              n_le as size_t, a_mat.as_ptr(), b.as_ptr(),
-                              n_eq as size_t, a_eq_mat.as_ptr(), b_eq.as_ptr(),
+        let status = quadprog(n as i32, h_mat.as_ptr(), f.as_ptr(),
+                              n_le as i32, a_mat.as_ptr(), b.as_ptr(),
+                              n_eq as i32, a_eq_mat.as_ptr(), b_eq.as_ptr(),
                               lb.as_ptr(), ub.as_ptr(),
                               &mut obj_val, x.as_mut_ptr());
         if status != 0 {
@@ -194,17 +341,18 @@ fn copy_mat(n: usize, a: &mut [f64], row: usize, col: usize, m: usize, b: &[f64]
 //     }
 // }
 
-fn mpc_ltv<F, G>(a_fun: &F, b_fun: &G, q: &[f64], r: &[f64], t_span: &[f64],
-                 horizon: usize, a_x_constraints: &[f64], b_x_constraints: &[f64],
+fn mpc_ltv<F, G>(a_fun: &F, b_fun: &G, q_diag: &[f64], r_diag: &[f64],
+                 t_span: &[f64], horizon: usize,
+                 a_x_constraints: &[f64], b_x_constraints: &[f64],
                  a_u_constraints: &[f64], b_u_constraints: &[f64],
                  x_lb: &[f64], x_ub: &[f64],
                  u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
 where F: Fn(usize, &mut [f64]),
       G: Fn(usize, &mut [f64]) {
     let n = x0.len();
-    assert_eq!(q.len(), n * n);
+    assert_eq!(q_diag.len(), n);
 
-    let m = r.len();
+    let m = r_diag.len();
     let dt = t_span[1] - t_span[0]; // assume fixed
     let n_steps = t_span.len();
 
@@ -216,16 +364,15 @@ where F: Fn(usize, &mut [f64]),
     // decision variables will correspond first to the xs and then to the us
     // not over the whole time span, but just over the horizon
     let n_dec = n * horizon + m * (horizon - 1);
-    let mut quadratic_cost = vec![0.0; n_dec * n_dec];
+    let mut quadratic_cost_diag = vec![0.0; n_dec];
     let linear_cost = vec![0.0; n_dec]; // stays zeros
     for i in 0..horizon {
-        // copy matrix q onto diagonal of cost matrix
-        copy_mat(n_dec, &mut quadratic_cost, i * n, i * n, n, &q);
+        quadratic_cost_diag[i*n..i*n+n].copy_from_slice(&q_diag);
     }
     // same but with r instead of q, offset in the matrix after all the q stuff
     for i in 0..horizon-1 {
-        let row_col = horizon * n + i * m;
-        copy_mat(n_dec, &mut quadratic_cost, row_col, row_col, m, &r);
+        let idx = horizon * n + i * m;
+        quadratic_cost_diag[idx..idx+m].copy_from_slice(&r_diag);
     }
 
     // figure out the number of inequalities per decision variable
@@ -280,30 +427,62 @@ where F: Fn(usize, &mut [f64]),
     // and then each step relates with the previous through euler integration
 
     let n_eq = n * horizon;
-    let mut a_eq = vec![0.0; n_eq * n_dec];
+    // let mut a_eq = vec![0.0; n_eq * n_dec];
     let mut b_eq = vec![0.0; n_eq];
 
+    // reusable storage for values from "a" and "b" functions
     let mut a_mat = vec![0.0; n * n];
-    let mut b_mat = vec![0.0; n];
+    let mut b_mat = vec![0.0; n * m];
 
     // for intial conditions, identity
     // also setup convenience neg_identity matrix
-    let mut neg_identity = vec![0.0; n * n];
-    for i in 0..n {
-        a_eq[i * n_dec + i] = 1.0;
-        neg_identity[i * n + i] = -1.0;
-    }
+    // let mut neg_identity = vec![0.0; n * n];
+    // for i in 0..n {
+    //     a_eq[i * n_dec + i] = 1.0;
+    //     neg_identity[i * n + i] = -1.0;
+    // }
     xs[0].copy_from_slice(x0);
 
+    let mut qp = QuadProg::new(n_dec, &linear_cost, &lb, &ub, 0, n_eq);
+    qp.diagonal_quadratic_cost(&quadratic_cost_diag);
+
+    let mut solved_vars = vec![0.0; n_dec];
+
+    // n coefs for the initial condition identity
+    // then for each state variable, each step in the remaining horizon...
+    // there are n coefficients from A_i, m from B_i, and 1 from -X_i+1
+    // note: rows correspond to constraints, columns to decision variables
+    let aeq_coefs_n = n + (n * (horizon - 1)) * (n + m + 1);
+    let mut aeq_row_idxs = vec![0; aeq_coefs_n];
+    let mut aeq_col_idxs = vec![0; aeq_coefs_n];
+    let mut aeq_coefs = vec![0.0; aeq_coefs_n];
+
+    // initial conditions identity
+    for i in 0..n {
+        aeq_row_idxs[i] = i as i32;
+        aeq_col_idxs[i] = i as i32;
+        aeq_coefs[i] = 1.0;
+    }
+
     for j in 0..n_steps-1 {
-        // for initial conditions
+        // for initial conditions, all other values stay at 0
         b_eq[0..n].copy_from_slice(&xs[j]);
 
         // euler integration equality constraints
+        // A_i * X_i + B_i * U_i - X_i+1 = 0
+        let mut aeq_i = n; // after initial conditions
         for i in 1..horizon {
+            // - X_i+1
             let row = i * n;
-            copy_mat(n_dec, &mut a_eq, row, row, n, &neg_identity);
+            // copy_mat(n_dec, &mut a_eq, row, row, n, &neg_identity);
+            for j in 0..n {
+                aeq_row_idxs[aeq_i] = (row + j) as i32;
+                aeq_col_idxs[aeq_i] = (row + j) as i32;
+                aeq_coefs[aeq_i] = -1.0;
+                aeq_i += 1;
+            }
 
+            // A_i * X_i
             a_fun(i, &mut a_mat);
             for k in 0..n*n {
                 a_mat[k] *= dt;
@@ -311,13 +490,30 @@ where F: Fn(usize, &mut [f64]),
             for k in 0..n {
                 a_mat[k * n + k] += 1.0;
             }
-            copy_mat(n_dec, &mut a_eq, row, row - n, n, &a_mat);
+            // copy_mat(n_dec, &mut a_eq, row, row - n, n, &a_mat);
+            for j in 0..n {
+                for k in 0..n {
+                    aeq_row_idxs[aeq_i] = (row + j) as i32;
+                    aeq_col_idxs[aeq_i] = (row - n + k) as i32;
+                    aeq_coefs[aeq_i] = a_mat[j * n + k];
+                    aeq_i += 1;
+                }
+            }
 
+            // B_i * U_i
             b_fun(i, &mut b_mat);
-            for k in 0..n {
+            for k in 0..n*m {
                 b_mat[k] *= dt;
             }
-            copy_mat(n_dec, &mut a_eq, row, (i - 1) * m + n * horizon, 1, &b_mat);
+            // copy_mat(n_dec, &mut a_eq, row, (i - 1) * m + n * horizon, m, &b_mat);
+            for j in 0..n {
+                for k in 0..m {
+                    aeq_row_idxs[aeq_i] = (row + j) as i32;
+                    aeq_col_idxs[aeq_i] = ((i - 1) * m + n * horizon + k) as i32;
+                    aeq_coefs[aeq_i] = b_mat[j * m + k];
+                    aeq_i += 1;
+                }
+            }
         }
 
         // println!("Q: {:?}", &quadratic_cost);
@@ -326,11 +522,14 @@ where F: Fn(usize, &mut [f64]),
         // println!("A_eq: {:?}", &a_eq);
         // println!("b_eq: {:?}", &b_eq);
 
-        if let Some((_, x)) = solve_quadprog(&quadratic_cost, &linear_cost, &a_ineq, &b_ineq, &a_eq, &b_eq, &lb, &ub) {
+        // qp.dense_eq_constraints(&a_eq, &b_eq);
+        qp.sparse_eq_constraints(&aeq_row_idxs, &aeq_col_idxs, &aeq_coefs, &b_eq);
+
+        if let Some(_) = qp.run(&mut solved_vars) {
             // println!("{}", obj_val);
-            // println!("{:?}", x);
-            xs[j + 1].copy_from_slice(&x[n..2*n]);
-            us[j].copy_from_slice(&x[n*horizon..n*horizon+m]);
+            // println!("{:?}", solved_vars);
+            xs[j + 1].copy_from_slice(&solved_vars[n..2*n]);
+            us[j].copy_from_slice(&solved_vars[n*horizon..n*horizon+m]);
         } else {
             panic!("Quadratic program could not be solved");
         }
@@ -430,9 +629,9 @@ fn mpc_test() {
     let a_fun = |_: usize, a: &mut [f64]| a.copy_from_slice(&[1., 1., 0., 1.]);
     let b_fun = |_: usize, b: &mut [f64]| b.copy_from_slice(&[0., 1.]);
     let x0 = [-1., -1.];
-    let n_steps = 1000;
+    let n_steps = 200;
     let t_span = (0..n_steps).map(|i: usize| i as f64 * 5. / (n_steps - 1) as f64).collect::<Vec<_>>();
-    let q = vec![1000., 0., 0., 1000.];
+    let q = vec![1000., 1000.];
     let r = vec![0.1];
 
     let horizon = 100;
@@ -456,7 +655,7 @@ fn mpc_test() {
                           &x_lb, &x_ub, &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
 
-    if true {
+    if false {
         let mut x0s = vec![0.0; n_steps];
         let mut x1s = vec![0.0; n_steps];
         for i in 0..n_steps {
@@ -475,7 +674,7 @@ fn mpc_test() {
             .ylabel("Y");
         let mut mpl = Matplotlib::new().unwrap();
         ax.apply(&mut mpl).unwrap();
-        mpl.show().unwrap();
+        // mpl.show().unwrap();
         mpl.wait().unwrap();
     }
 }
