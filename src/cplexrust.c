@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <ilcplex/cplex.h>
 
 int cplex_check_error(CPXENVptr env, int status)
@@ -29,7 +30,7 @@ int quadprog(int n, double *H, double *f,
     // status = CPXsetintparam(env, CPXPARAM_ScreenOutput, CPX_ON);
     // if (cplex_check_error(env, status)) { return status; }
 
-    // data checking (not sure what for)
+    // data checking
     // status = CPXsetintparam(env, CPXPARAM_Read_DataCheck, CPX_DATACHECK_WARN);
     // if (cplex_check_error(env, status)) { return status; }
 
@@ -138,11 +139,14 @@ int qp_create(int n, double *f, double *lb, double *ub, int n_le, int n_eq, CPXE
     CPXENVptr env = CPXopenCPLEX(&status);
     if (cplex_check_error(env, status)) { return status; }
 
+    // CPXsetintparam(env, CPXPARAM_QPMethod, CPX_ALG_NET);
+    CPXsetintparam(env, CPX_PARAM_FEASOPTMODE, CPX_FEASOPT_MIN_QUAD);
+
     // screen update thing
     // status = CPXsetintparam(env, CPXPARAM_ScreenOutput, CPX_ON);
     // if (cplex_check_error(env, status)) { return status; }
 
-    // data checking (not sure what for)
+    // data checking
     // status = CPXsetintparam(env, CPXPARAM_Read_DataCheck, CPX_DATACHECK_WARN);
     // if (cplex_check_error(env, status)) { return status; }
 
@@ -329,16 +333,39 @@ int qp_sparse_eq_constraints(CPXENVptr env, CPXLPptr qp, int n_eq, int n_coefs, 
 int qp_run(CPXENVptr env, CPXLPptr qp, double *obj_val, double *x_out) {
     int status = CPXqpopt(env, qp);
     if (cplex_check_error(env, status)) { return status; }
-
     int solstat;
     status = CPXsolution(env, qp, &solstat, obj_val, x_out, NULL, NULL, NULL);
+    if (status || solstat != CPX_STAT_OPTIMAL) {
+        int n_constraints = CPXgetnumrows(env, qp);
+        double *rhs_relaxation_cost = malloc(sizeof(double) * n_constraints);
+        // initial condition constraints can not be relaxed
+        for (int i = 0; i < 3; i++) {
+            rhs_relaxation_cost[i] = 0.00001;
+        }
+        // but all other integration constraints can be relaxed equally
+        for (int i = 3; i < n_constraints; i++) {
+            rhs_relaxation_cost[i] = 1;
+        }
+        status = CPXfeasopt(env, qp, rhs_relaxation_cost, NULL, NULL, NULL);
+        free(rhs_relaxation_cost);
+
+        status = CPXsolution(env, qp, &solstat, obj_val, x_out, NULL, NULL, NULL);
+    }
     if (cplex_check_error(env, status)) { return status; }
 
-    // 1 indicates a solution
     // translate to 0 as the error code for "no error"
-    if (solstat == 1) {
+    if (solstat == CPX_STAT_OPTIMAL) {
         return 0;
     }
+    // did not need relaxation
+    if (solstat == CPX_STAT_FEASIBLE) {
+        return 0;
+    }
+    // found relaxed solution
+    if (solstat == CPX_STAT_FEASIBLE_RELAXED_QUAD) {
+        return 0;
+    }
+    printf("Solution code: %d\n", solstat);
     return -1;
 }
 
