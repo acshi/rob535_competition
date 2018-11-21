@@ -1,6 +1,8 @@
 extern crate libc;
 use libc::c_void;
 use std::ptr;
+use std::fs::File;
+use std::io::Read;
 
 extern crate lapack;
 extern crate blas;
@@ -28,6 +30,8 @@ extern {
     fn qp_create(n: i32, f: *const f64, lb: *const f64, ub: *const f64,
                   n_le: i32, n_eq: i32,
                   env_out: *mut *mut c_void, qp_out: *mut *mut c_void) -> i32;
+
+    fn qp_bounds(env: *mut c_void, qp: *mut c_void, lb: *const f64, ub: *const f64) -> i32;
 
     fn qp_diagonal_quadratic_cost(env: *mut c_void, qp: *mut c_void, q_diag: *const f64) -> i32;
     fn qp_dense_quadratic_cost(env: *mut c_void, qp: *mut c_void, q: *const f64) -> i32;
@@ -72,6 +76,17 @@ impl QuadProg {
             }
         }
         QuadProg { env, qp, n, n_le, n_eq }
+    }
+
+    fn bounds(&mut self, lb: &[f64], ub: &[f64]) {
+        assert_eq!(lb.len(), self.n as usize);
+        assert_eq!(ub.len(), self.n as usize);
+        unsafe {
+            let status = qp_bounds(self.env, self.qp, lb.as_ptr(), ub.as_ptr());
+            if status != 0 {
+                panic!();
+            }
+        }
     }
 
     fn diagonal_quadratic_cost(&mut self, q_diag: &[f64]) {
@@ -550,14 +565,16 @@ where F: Fn(usize, &mut [f64]),
     }
 }
 
-fn mpc_ltv<F, G>(a_fun: &F, b_fun: &G, q_diag: &[f64], r_diag: &[f64],
-                 t_span: &[f64], horizon: usize,
-                 a_x_constraints: &[f64], b_x_constraints: &[f64],
-                 a_u_constraints: &[f64], b_u_constraints: &[f64],
-                 x_lb: &[f64], x_ub: &[f64],
-                 u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
+fn mpc_ltv<F, G, H>(a_fun: &F, b_fun: &G, q_diag: &[f64], r_diag: &[f64],
+                    t_span: &[f64], horizon: usize,
+                    ref_x: &[f64], ref_u: &[f64], ode_fun: &H,
+                    a_x_constraints: &[f64], b_x_constraints: &[f64],
+                    a_u_constraints: &[f64], b_u_constraints: &[f64],
+                    x_lb: &[f64], x_ub: &[f64],
+                    u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
 where F: Fn(usize, &mut [f64]),
-      G: Fn(usize, &mut [f64]) {
+      G: Fn(usize, &mut [f64]),
+      H: Fn(f64, &[f64], &[f64], &mut[f64]) {
     let n = x0.len();
     assert_eq!(q_diag.len(), n);
 
@@ -614,20 +631,11 @@ where F: Fn(usize, &mut [f64]),
     let mut lb = vec![-cplex_inf; n_dec];
     let mut ub = vec![cplex_inf; n_dec];
 
-    assert_eq!(x_lb.len(), n);
-    assert_eq!(x_ub.len(), n);
-    assert_eq!(u_lb.len(), m);
-    assert_eq!(u_ub.len(), m);
-
-    for i in 0..horizon {
-        lb[n*i..n*i+n].copy_from_slice(x_lb);
-        ub[n*i..n*i+n].copy_from_slice(x_ub);
-    }
-    for i in 0..horizon-1 {
-        let idx = n * horizon + m * i;
-        lb[idx..idx+m].copy_from_slice(u_lb);
-        ub[idx..idx+m].copy_from_slice(u_ub);
-    }
+    // can be length zero to leave unbounded
+    assert!(x_lb.len() == n || x_lb.len() == 0);
+    assert_eq!(x_ub.len(), x_lb.len());
+    assert!(u_lb.len() == m || u_lb.len() == 0);
+    assert_eq!(u_ub.len(), u_lb.len());
 
     // Finally, for each time step, we set up equality constraints on the states
     // (only as far as our forward horizon)
@@ -639,6 +647,7 @@ where F: Fn(usize, &mut [f64]),
     let mut b_eq = vec![0.0; n_eq];
 
     xs[0].copy_from_slice(x0);
+    let mut x_new = vec![0.0; n];
 
     let mut qp = QuadProg::new(n_dec, &linear_cost, &lb, &ub, 0, n_eq);
     qp.diagonal_quadratic_cost(&quadratic_cost_diag);
@@ -661,27 +670,179 @@ where F: Fn(usize, &mut [f64]),
         aeq_coefs[i] = 1.0;
     }
 
-    for j in 0..n_steps-1 {
+    for k in 0..n_steps-1 {
         // for initial conditions, all other values stay at 0
-        b_eq[0..n].copy_from_slice(&xs[j]);
+        b_eq[0..n].copy_from_slice(&xs[k]);
+        for i in 0..n {
+            b_eq[i] -= ref_x[n_steps * i + k];
+        }
         euler_constraints(n, m, horizon, dt, a_fun, b_fun,
                           &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
         // rk4_constraints(n, m, horizon, dt, a_fun, b_fun,
         //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
         qp.sparse_eq_constraints(&aeq_row_idxs, &aeq_col_idxs, &aeq_coefs, &b_eq);
 
+        let horizon_left = n_steps - k + 1;
+        let valid_horizon = if horizon_left < horizon { horizon_left } else { horizon };
+
+        // bounds are in terms of the reference
+        if x_lb.len() > 0 {
+            for i in 0..valid_horizon {
+                for j in 0..n {
+                    lb[n * i + j] = x_lb[j] - ref_x[n_steps * j + k + i];
+                    ub[n * i + j] = x_ub[j] - ref_x[n_steps * j + k + i];
+                }
+            }
+            for i in valid_horizon..horizon {
+                for j in 0..n {
+                    lb[n * i + j] = -cplex_inf;
+                    ub[n * i + j] = cplex_inf;
+                }
+            }
+        }
+        if u_lb.len() > 0 {
+            for i in 0..valid_horizon-1 {
+                let idx = n * horizon + m * i;
+                for j in 0..m {
+                    lb[idx + j] = u_lb[j] - ref_u[n_steps * j + k + i];
+                    ub[idx + j] = u_ub[j] - ref_u[n_steps * j + k + i];
+                }
+            }
+            for i in valid_horizon-1..horizon-1 {
+                let idx = n * horizon + m * i;
+                for j in 0..m {
+                    lb[idx + j] = -cplex_inf;
+                    ub[idx + j] = cplex_inf;
+                }
+            }
+        }
+        qp.bounds(&lb, &ub);
+
         if let Some(_) = qp.run(&mut solved_vars) {
             // println!("{}", obj_val);
             // println!("{:?}", solved_vars);
-            xs[j + 1].copy_from_slice(&solved_vars[n..2*n]);
-            us[j].copy_from_slice(&solved_vars[n*horizon..n*horizon+m]);
+
+            // we actually don't care much where the quadprog thinks we end up
+            // xs[k + 1].copy_from_slice(&solved_vars[n..2*n]);
+            us[k].copy_from_slice(&solved_vars[n*horizon..n*horizon+m]);
+            for i in 0..m {
+                us[k][i] += ref_u[n_steps * i + k];
+            }
+
+            // pass through "real world" model to get our next state
+            let mut integrate_fun = |t: f64, x: &[f64], x_new: &mut[f64]| {
+                ode_fun(k as f64 * dt + t, x, &us[k], x_new);
+            };
+            rk4_integrate(dt / 10.0, 10, &mut integrate_fun, &xs[k], &mut x_new);
+            xs[k + 1].copy_from_slice(&x_new);
         } else {
-            panic!("Quadratic program could not be solved on timestep {}", j);
+            panic!("Quadratic program could not be solved on timestep {}", k);
         }
     }
 
     (xs, us)
 }
+
+// x_out can either be the same length as x0, or n_steps times that length
+fn rk4_integrate<F>(h: f64, n_steps: usize, f: &mut F, x0: &[f64], x_out: &mut [f64])
+where F: FnMut(f64, &[f64], &mut [f64]) {
+    let n = x0.len();
+    let just_x_result = x_out.len() == n;
+    if !just_x_result {
+        assert_eq!(n * (n_steps + 1), x_out.len());
+    }
+
+    let mut k1 = vec![0.0; n];
+    let mut k2 = vec![0.0; n];
+    let mut k3 = vec![0.0; n];
+    let mut k4 = vec![0.0; n];
+
+    let mut x_tmp = vec![0.0; n];
+    let mut x_old = vec![0.0; n];
+
+    x_old.copy_from_slice(x0);
+    x_out[0..n].copy_from_slice(x0);
+
+    let mut t = 0.0;
+    for i in 0..n_steps {
+        {
+            f(t, &x_old, &mut k1);
+
+            for j in 0..n { x_tmp[j] = x_old[j] + 0.5 * h * k1[j]; }
+            f(t + h * 0.5, &x_tmp, &mut k2);
+
+            for j in 0..n { x_tmp[j] = x_old[j] + 0.5 * h * k2[j]; }
+            f(t + h * 0.5, &x_tmp, &mut k3);
+
+            for j in 0..n { x_tmp[j] = x_old[j] + h * k3[j]; }
+            f(t + h, &x_tmp, &mut k4);
+
+            for j in 0..n { x_tmp[j] = x_old[j] + h / 6.0 * (k1[j] + 2.0 * k2[j] + 2.0 * k3[j] + k4[j]); }
+        }
+        x_old.copy_from_slice(&x_tmp);
+        if !just_x_result {
+            x_out[i*n+n..i*n+n*2].copy_from_slice(&x_tmp);
+        }
+
+        t += h;
+    }
+
+    if just_x_result {
+        x_out.copy_from_slice(&x_old);
+    }
+}
+
+// fn forward_integrate_control_inputs(t: f64, x: &[f64], time_steps: &[f64], controls: &[f64], dx_dt: &mut [f64]) {
+//     let Nw = 2.;
+//     let f = 0.01;
+//     let Iz = 2667.0;
+//     let a = 1.35;
+//     let b = 1.45;
+//     let By = 0.27;
+//     let Cy = 1.2;
+//     let Dy = 0.7;
+//     let Ey = -1.6;
+//     let Shy = 0.0;
+//     let Svy = 0.0;
+//     let m = 1400.0;
+//     let g = 9.806;
+//
+//     // %generate input functions
+//     // delta_f=interp1(T,U(:,1),t,'previous','extrap');
+//     // F_x=interp1(T,U(:,2),t,'previous','extrap');
+//
+//     // slip angle functions in degrees
+//     let a_f = rad2deg(delta_f-atan2(x[3]+a*x[5], x[1]));
+//     let a_r = rad2deg(-atan2((x[3]-b*x[5]),x[1]));
+//
+//     %Nonlinear Tire Dynamics
+//     phi_yf=(1-Ey)*(a_f+Shy)+(Ey/By)*atan(By*(a_f+Shy));
+//     phi_yr=(1-Ey)*(a_r+Shy)+(Ey/By)*atan(By*(a_r+Shy));
+//
+//     F_zf=b/(a+b)*m*g;
+//     F_yf=F_zf*Dy*sin(Cy*atan(By*phi_yf))+Svy;
+//
+//     F_zr=a/(a+b)*m*g;
+//     F_yr=F_zr*Dy*sin(Cy*atan(By*phi_yr))+Svy;
+//
+//     F_total=sqrt((Nw*F_x)^2+(F_yr^2));
+//     F_max=0.7*m*g;
+//
+//     if F_total>F_max
+//
+//         F_x=F_max/F_total*F_x;
+//
+//         F_yr=F_max/F_total*F_yr;
+//     end
+//
+//     %vehicle dynamics
+//     dzdt= [x(2)*cos(x(5))-x(4)*sin(x(5));...
+//               (-f*m*g+Nw*F_x-F_yf*sin(delta_f))/m+x(4)*x(6);...
+//               x(2)*sin(x(5))+x(4)*cos(x(5));...
+//               (F_yf*cos(delta_f)+F_yr)/m-x(2)*x(6);...
+//               x(6);...
+//               (F_yf*a*cos(delta_f)-F_yr*b)/Iz];
+// }
 
 fn quadprog_test() {
     let h_mat = [1., -1., 1., -1., 2., -2., 1., -2., 4.];
@@ -769,17 +930,82 @@ fn lqr_test() {
     }
 }
 
-fn mpc_test() {
-    // everything here is now in __column-major__ order
-    let a_fun = |_: usize, a: &mut [f64]| a.copy_from_slice(&[1., 1., 0., 1.]);
-    let b_fun = |_: usize, b: &mut [f64]| b.copy_from_slice(&[0., 1.]);
-    let x0 = [-1., -1.];
-    let n_steps = 1000;
-    let t_span = (0..n_steps).map(|i: usize| i as f64 * 5. / (n_steps - 1) as f64).collect::<Vec<_>>();
-    let q = vec![1000., 1000.];
-    let r = vec![0.1];
+fn is_float_digit(c: char) -> bool {
+    return c.is_numeric() || c == '.' || c == '-';
+}
 
-    let horizon = 100;
+fn fill_from_csv(filename: &str, vals: &mut [f64]) -> std::io::Result<()> {
+    let mut f = File::open(filename)?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf)?;
+
+    let mut buf_i = 0;
+    for i in 0..vals.len() {
+        let mut next_nondigit = buf_i;
+        while is_float_digit(buf[next_nondigit] as char) {
+            next_nondigit += 1;
+        }
+        vals[i] = String::from_utf8(buf[buf_i..next_nondigit].to_owned()).unwrap().parse().unwrap();
+        buf_i = next_nondigit;
+        while buf_i < buf.len() && !is_float_digit(buf[buf_i] as char) {
+            buf_i += 1;
+        }
+    }
+
+    Ok(())
+}
+
+fn mpc_test() {
+    let n = 3;
+    let m = 2;
+    let total_time = 6.0;
+    let n_steps = 601;
+
+    let mut ref_x = vec![0.0; n * n_steps];
+    fill_from_csv("ref_x.csv", &mut ref_x).unwrap();
+
+    let mut ref_u = vec![0.0; m * n_steps];
+    fill_from_csv("ref_u.csv", &mut ref_u).unwrap();
+
+    // let r_xs = &ref_x[0..n_steps];
+    // let r_ys = &ref_x[n_steps..n_steps*2];
+    let r_psis = &ref_x[n_steps*2..n_steps*3];
+    let r_us = &ref_u[0..n_steps];
+    let r_deltas = &ref_u[n_steps..n_steps*2];
+
+    let l = 3.0; // wheelbase
+    let rb = 1.5; // rear wheel to center of mass
+
+    let a_fun = |idx: usize, a: &mut [f64]| {
+        // only bother setting non-zero elements
+        // since we know "a" will be initialized to zeros
+        a[2] = r_us[idx] * (-r_psis[idx].sin() - rb / l * r_deltas[idx].tan() * r_psis[idx].cos()); // dpsi/du
+        a[5] = r_us[idx] * (r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin()); // dpsi/ddelta
+    };
+    let b_fun = |idx: usize, b: &mut [f64]| {
+        b[0] = r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin(); // dx/du
+        b[2] = r_psis[idx].sin() + rb / l * r_deltas[idx].tan() * r_psis[idx].cos(); // dy/du
+        b[1] = -rb / l * r_us[idx] * r_psis[idx].sin() / r_deltas[idx].cos().powi(2); // dx/ddelta
+        b[3] = rb / l * r_us[idx] * r_psis[idx].cos() / r_deltas[idx].cos().powi(2); // dy/ddelta
+        b[4] = r_deltas[idx].tan() / l; // dpsi/du
+        b[5] = r_us[idx] / (r_deltas[idx].cos().powi(2) * l); // dpsi/ddelta
+    };
+    let ode_fun = |_t: f64, x: &[f64], u: &[f64], x_new: &mut[f64]| {
+        let u_val = u[0];
+        let delta_val = u[1];
+        x_new[0] = u_val * (x[2].cos() - rb / l * delta_val.tan() * x[2].sin());
+        x_new[1] = u_val * (x[2].sin() + rb / l * delta_val.tan() * x[2].cos());
+        x_new[2] = u_val / l * delta_val.tan();
+    };
+
+    let x0 = [0.25, -0.25, -0.1];
+
+    let t_span = (0..n_steps).map(|i: usize| i as f64 * total_time / (n_steps - 1) as f64).collect::<Vec<_>>();
+    let dt = t_span[1] - t_span[0];
+    let q = vec![1., 1., 0.5];
+    let r = vec![0.1, 0.01];
+
+    let horizon = 11;
     // let a_x_constraints = vec![1., 0., -1., 0., 0., 1., 0., -1.];
     // let b_x_constraints = vec![2., 2., 2., 2.];
     // let a_u_constraints = vec![1., -1.];
@@ -789,32 +1015,64 @@ fn mpc_test() {
     let a_u_constraints = vec![];
     let b_u_constraints = vec![];
 
-    let x_lb = vec![-2., -2.];
-    let x_ub = vec![2., 2.];
-    let u_lb = vec![-10.];
-    let u_ub = vec![10.];
+    let x_lb = vec![];
+    let x_ub = vec![];
+    let u_lb = vec![0.0, -0.5];
+    let u_ub = vec![1.0, 0.5];
 
     let start_time = precise_time_s();
-    let (xs, _) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon,
+    let (xs, us) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon, &ref_x, &ref_u, &ode_fun,
                           &a_x_constraints, &b_x_constraints, &a_u_constraints, &b_u_constraints,
                           &x_lb, &x_ub, &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
 
     if true {
-        let mut x0s = vec![0.0; n_steps];
-        let mut x1s = vec![0.0; n_steps];
+        let mut xs1 = vec![0.0; n_steps];
+        let mut ys1 = vec![0.0; n_steps];
         for i in 0..n_steps {
-            x0s[i] = xs[i][0];
-            x1s[i] = xs[i][1];
+            xs1[i] = xs[i][0];
+            ys1[i] = xs[i][1];
+        }
+
+        // let mut rk4_out = vec![0.0; n_steps * n];
+        // let mut integrate_fun = |t: f64, x: &[f64], x_new: &mut[f64]| {
+        //     let t_idx = (t / dt) as usize;
+        //     ode_fun(t, x, &us[t_idx], x_new);
+        // };
+        // rk4_integrate(dt, n_steps - 1, &mut integrate_fun, &x0, &mut rk4_out);
+        //
+        // let mut xs2 = vec![0.0; n_steps];
+        // let mut ys2 = vec![0.0; n_steps];
+        // for i in 0..n_steps {
+        //     xs2[i] = rk4_out[i*n];
+        //     ys2[i] = rk4_out[i*n+1];
+        // }
+
+        let mut xs3 = vec![0.0; n_steps];
+        let mut ys3 = vec![0.0; n_steps];
+        for i in 0..n_steps {
+            xs3[i] = ref_x[i];
+            ys3[i] = ref_x[n_steps+i];
         }
 
         let ax = Axes2D::new()
             .add(Line2D::new("")
-              .data(&x0s, &x1s)
-              .color("blue")
-              // .marker("x")
-              .linestyle("-")
-              .linewidth(1.0))
+                .data(&xs1, &ys1)
+                .color("blue")
+                // .marker("+")
+                .linestyle("-")
+                .linewidth(1.0))
+            // .add(Line2D::new("")
+            //     .data(&xs2, &ys2)
+            //     .color("green")
+            //     .marker("x")
+            //     .linestyle("-")
+            //     .linewidth(1.0))
+            .add(Line2D::new("")
+                .data(&xs3, &ys3)
+                .color("orange")
+                .linestyle("-")
+                .linewidth(1.0))
             .xlabel("X")
             .ylabel("Y");
         let mut mpl = Matplotlib::new().unwrap();

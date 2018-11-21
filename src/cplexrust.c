@@ -188,6 +188,28 @@ int qp_create(int n, double *f, double *lb, double *ub, int n_le, int n_eq, CPXE
     return 0;
 }
 
+int qp_bounds(CPXENVptr env, CPXLPptr qp, double *lb, double *ub) {
+    int n = CPXgetnumcols(env, qp);
+    char *bound_kind = malloc(sizeof(char) * n);
+    int *idxs = malloc(sizeof(int) * n);
+    for (int i = 0; i < n; i++) {
+        bound_kind[i] = 'L';
+        idxs[i] = i;
+    }
+    int status = CPXchgbds(env, qp, n, idxs, bound_kind, lb);
+    if (!status) {
+        for (int i = 0; i < n; i++) {
+            bound_kind[i] = 'U';
+        }
+        status = CPXchgbds(env, qp, n, idxs, bound_kind, ub);
+    }
+    free(idxs);
+    free(bound_kind);
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
+}
+
 int qp_diagonal_quadratic_cost(CPXENVptr env, CPXLPptr qp, double *q_diag) {
     return CPXcopyqpsep(env, qp, q_diag);
 }
