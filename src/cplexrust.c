@@ -360,6 +360,7 @@ int qp_run(CPXENVptr env, CPXLPptr qp, double *obj_val, double *x_out) {
     status = CPXsolution(env, qp, &solstat, obj_val, x_out, NULL, NULL, NULL);
     if (status || solstat != CPX_STAT_OPTIMAL) {
         printf(".");
+        fflush(stdout);
 
         int n_constraints = CPXgetnumrows(env, qp);
         double *rhs_relaxation_cost = malloc(sizeof(double) * n_constraints);

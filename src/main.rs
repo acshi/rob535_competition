@@ -381,8 +381,8 @@ fn rk4_constraints<F, G>(n: usize, m: usize, idx: usize, horizon: usize, dt: f64
                          a_fun: &F, b_fun: &G,
                          aeq_row_idxs: &mut [i32], aeq_col_idxs: &mut [i32],
                          aeq_coefs: &mut [f64])
-where F: Fn(usize, &mut [f64]),
-      G: Fn(usize, &mut [f64]) {
+where F: Fn(f64, &mut [f64]),
+      G: Fn(f64, &mut [f64]) {
     let mut xpart = vec![0.0; n * n];
     let mut upart = vec![0.0; n * m];
 
@@ -420,9 +420,9 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // XPart * X_i
-        a_fun(i + idx, &mut a1);
-        a_fun(i + idx, &mut a2);
-        a_fun(i + 1 + idx, &mut a3);
+        a_fun((i + idx) as f64, &mut a1);
+        a_fun((i + idx) as f64 + 0.5, &mut a2);
+        a_fun((i + idx) as f64 + 1.0, &mut a3);
 
         // (4*h*A1 + 16*h*A2 + 4*h*A3)/24
         for k in 0..n*n {
@@ -464,9 +464,9 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // UPart
-        b_fun(i + idx, &mut b1);
-        b_fun(i + idx, &mut b2);
-        b_fun(i + 1 + idx, &mut b3);
+        b_fun((i + idx) as f64, &mut b1);
+        b_fun((i + idx) as f64 + 0.5, &mut b2);
+        b_fun((i + idx) as f64 + 1.0, &mut b3);
 
         // (4*h*B1 + 16*h*B2 + 4*h*B3)/24
         for k in 0..n*m {
@@ -530,8 +530,8 @@ fn rk2_constraints<F, G>(n: usize, m: usize, idx: usize, horizon: usize, dt: f64
                          a_fun: &F, b_fun: &G,
                          aeq_row_idxs: &mut [i32], aeq_col_idxs: &mut [i32],
                          aeq_coefs: &mut [f64])
-where F: Fn(usize, &mut [f64]),
-      G: Fn(usize, &mut [f64]) {
+where F: Fn(f64, &mut [f64]),
+      G: Fn(f64, &mut [f64]) {
     let mut xpart = vec![0.0; n * n];
     let mut upart = vec![0.0; n * m];
 
@@ -557,8 +557,8 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // XPart * X_i
-        a_fun(i + idx, &mut a1);
-        a_fun(i + idx, &mut a2);
+        a_fun((i + idx) as f64, &mut a1);
+        a_fun((i + idx) as f64 + 0.5, &mut a2);
 
         // h*A2
         for k in 0..n*n {
@@ -585,8 +585,8 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // UPart
-        b_fun(i + idx, &mut b1);
-        b_fun(i + idx, &mut b2);
+        b_fun((i + idx) as f64, &mut b1);
+        b_fun((i + idx) as f64 + 0.5, &mut b2);
 
         // h*B2
         for k in 0..n*m {
@@ -614,8 +614,8 @@ fn euler_constraints<F, G>(n: usize, m: usize, idx: usize, horizon: usize, dt: f
                            a_fun: &F, b_fun: &G,
                            aeq_row_idxs: &mut [i32], aeq_col_idxs: &mut [i32],
                            aeq_coefs: &mut [f64])
-where F: Fn(usize, &mut [f64]),
-      G: Fn(usize, &mut [f64]) {
+where F: Fn(f64, &mut [f64]),
+      G: Fn(f64, &mut [f64]) {
     let mut a_mat = vec![0.0; n * n];
     let mut b_mat = vec![0.0; n * m];
     // euler integration equality constraints
@@ -634,7 +634,7 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // dt * A_i * X_i
-        a_fun(i + idx, &mut a_mat);
+        a_fun((i + idx) as f64, &mut a_mat);
         for k in 0..n*n {
             a_mat[k] *= dt;
         }
@@ -652,7 +652,7 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // dt * B_i * U_i
-        b_fun(i + idx, &mut b_mat);
+        b_fun((i + idx) as f64, &mut b_mat);
         for k in 0..n*m {
             b_mat[k] *= dt;
         }
@@ -674,8 +674,8 @@ fn mpc_ltv<F, G, H>(a_fun: &F, b_fun: &G, q_diag: &[f64], r_diag: &[f64],
                     a_u_constraints: &[f64], b_u_constraints: &[f64],
                     x_lb: &[f64], x_ub: &[f64],
                     u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
-where F: Fn(usize, &mut [f64]),
-      G: Fn(usize, &mut [f64]),
+where F: Fn(f64, &mut [f64]),
+      G: Fn(f64, &mut [f64]),
       H: Fn(f64, &[f64], &[f64], &mut[f64]) {
     let n = x0.len();
     assert_eq!(q_diag.len(), n);
@@ -779,7 +779,7 @@ where F: Fn(usize, &mut [f64]),
         // for initial conditions, all other values stay at 0
         b_eq[0..n].copy_from_slice(&xs[k]);
         for i in 0..n {
-            b_eq[i] -= ref_x[n_steps * i + k];
+            b_eq[i] -= ref_x[(n_steps * i + k) * 2];
         }
         // zero invalid horizon coefficients
         if valid_horizon < horizon {
@@ -826,8 +826,8 @@ where F: Fn(usize, &mut [f64]),
         if x_lb.len() > 0 {
             for i in 0..valid_horizon {
                 for j in 0..n {
-                    lb[n * i + j] = x_lb[j] - ref_x[n_steps * j + k + i];
-                    ub[n * i + j] = x_ub[j] - ref_x[n_steps * j + k + i];
+                    lb[n * i + j] = x_lb[j] - ref_x[(n_steps * j + k + i) * 2];
+                    ub[n * i + j] = x_ub[j] - ref_x[(n_steps * j + k + i) * 2];
                 }
             }
             for i in valid_horizon..horizon {
@@ -841,8 +841,8 @@ where F: Fn(usize, &mut [f64]),
             for i in 0..valid_horizon-1 {
                 let idx = n * horizon + m * i;
                 for j in 0..m {
-                    lb[idx + j] = u_lb[j] - ref_u[n_steps * j + k + i];
-                    ub[idx + j] = u_ub[j] - ref_u[n_steps * j + k + i];
+                    lb[idx + j] = u_lb[j] - ref_u[(n_steps * j + k + i) * 2];
+                    ub[idx + j] = u_ub[j] - ref_u[(n_steps * j + k + i) * 2];
                 }
             }
             for i in valid_horizon-1..horizon-1 {
@@ -870,7 +870,7 @@ where F: Fn(usize, &mut [f64]),
             // xs[k + 1].copy_from_slice(&solved_vars[n..2*n]);
             us[k].copy_from_slice(&solved_vars[n*horizon..n*horizon+m]);
             for i in 0..m {
-                us[k][i] += ref_u[n_steps * i + k];
+                us[k][i] += ref_u[(n_steps * i + k) * 2];
             }
 
             // print!("{:.10} ", us[k][0]);
@@ -1106,13 +1106,17 @@ fn mpc_test() {
     let m = 2;
     let total_time = 6.0;
     let ref_steps = 601;
-    let step_factor = 1;
-    let n_steps = ref_steps * step_factor;
-    let horizon = 11 * step_factor;
+    // extra 2x factor for the half-steps needed by rk2/rk4
+    let itermediate_steps = 2;
+    let base_step_factor = 1;
+    let step_factor = base_step_factor * itermediate_steps;
+    let total_steps = ref_steps * step_factor;
+    let n_steps = total_steps / itermediate_steps;
+    let horizon = 11 * base_step_factor;
 
     let mut base_ref_x = vec![0.0; n * ref_steps];
     fill_from_csv("ref_x.csv", &mut base_ref_x).unwrap();
-    let mut ref_x = vec![0.0; n * n_steps];
+    let mut ref_x = vec![0.0; n * total_steps];
     let mut idx = 0;
     for _i in 0..n {
         for _j in 0..ref_steps-1 {
@@ -1134,7 +1138,7 @@ fn mpc_test() {
 
     let mut base_ref_u = vec![0.0; m * ref_steps];
     fill_from_csv("ref_u.csv", &mut base_ref_u).unwrap();
-    let mut ref_u = vec![0.0; m * n_steps];
+    let mut ref_u = vec![0.0; m * total_steps];
     let mut idx = 0;
     for _i in 0..m {
         for _j in 0..ref_steps-1 {
@@ -1154,16 +1158,17 @@ fn mpc_test() {
         }
     }
 
-    let r_xs = &ref_x[0..n_steps];
-    let r_ys = &ref_x[n_steps..n_steps*2];
-    let r_psis = &ref_x[n_steps*2..n_steps*3];
-    let r_us = &ref_u[0..n_steps];
-    let r_deltas = &ref_u[n_steps..n_steps*2];
+    let r_xs = &ref_x[0..total_steps];
+    let r_ys = &ref_x[total_steps..total_steps*2];
+    let r_psis = &ref_x[total_steps*2..total_steps*3];
+    let r_us = &ref_u[0..total_steps];
+    let r_deltas = &ref_u[total_steps..total_steps*2];
 
     let l = 3.0; // wheelbase
     let rb = 1.5; // rear wheel to center of mass
 
-    let a_fun = |idx: usize, a: &mut [f64]| {
+    let a_fun = |idx: f64, a: &mut [f64]| {
+        let idx = (idx * 2.0).round() as usize;
         for i in 0..9 { a[i] = 0.0; }
         // let u_val = r_us[idx];
         // let psi_val = r_psis[idx];
@@ -1174,7 +1179,8 @@ fn mpc_test() {
         a[2] = r_us[idx] * (-r_psis[idx].sin() - rb / l * r_deltas[idx].tan() * r_psis[idx].cos()); // dpsi/du
         a[5] = r_us[idx] * (r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin()); // dpsi/ddelta
     };
-    let b_fun = |idx: usize, b: &mut [f64]| {
+    let b_fun = |idx: f64, b: &mut [f64]| {
+        let idx = (idx * 2.0).round() as usize;
         b[0] = r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin(); // dx/du
         b[2] = r_psis[idx].sin() + rb / l * r_deltas[idx].tan() * r_psis[idx].cos(); // dy/du
         b[1] = -rb / l * r_us[idx] * r_psis[idx].sin() / r_deltas[idx].cos().powi(2); // dx/ddelta
@@ -1217,8 +1223,8 @@ fn mpc_test() {
     let mut dist_errors = vec![0.0; n_steps];
     let mut max_dist_error = 0.0;
     for i in 0..xs.len() {
-        let dx = xs[i][0] - r_xs[i];
-        let dy = xs[i][1] - r_ys[i];
+        let dx = xs[i][0] - r_xs[i*2];
+        let dy = xs[i][1] - r_ys[i*2];
         let dist_err = (dx * dx + dy * dy).sqrt();
         dist_errors[i] = dist_err;
         if xs[i][0] >= 3.0 && xs[i][0] <= 4.0 {
