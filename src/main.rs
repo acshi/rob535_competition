@@ -377,7 +377,7 @@ Simplify(XPart)
 Simplify(UPart)
 (h^4*B1*A2^2*A3+2*h^3*B1*A2^2+2*h^3*A2*B2*A3+4*h^2*B1*A2+4*h^2*A2*B2+4*h^2*B2*A3+4*h*B1+16*h*B2+4*h*B3)/24
 */
-fn rk4_constraints<F, G>(n: usize, m: usize, horizon: usize, dt: f64,
+fn rk4_constraints<F, G>(n: usize, m: usize, idx: usize, horizon: usize, dt: f64,
                          a_fun: &F, b_fun: &G,
                          aeq_row_idxs: &mut [i32], aeq_col_idxs: &mut [i32],
                          aeq_coefs: &mut [f64])
@@ -409,9 +409,9 @@ where F: Fn(usize, &mut [f64]),
     let mut a3a2a2b1 = vec![0.0; n * m];
 
     let mut aeq_i = n; // after initial conditions
-    for i in 1..horizon {
+    for i in 0..horizon-1 {
         // - X_i+1
-        let row = i * n;
+        let row = i * n + n;
         for j in 0..n {
             aeq_row_idxs[aeq_i] = (row + j) as i32;
             aeq_col_idxs[aeq_i] = (row + j) as i32;
@@ -420,9 +420,9 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // XPart * X_i
-        a_fun(i, &mut a1);
-        a_fun(i, &mut a2);
-        a_fun(i + 1, &mut a3);
+        a_fun(i + idx, &mut a1);
+        a_fun(i + idx, &mut a2);
+        a_fun(i + 1 + idx, &mut a3);
 
         // (4*h*A1 + 16*h*A2 + 4*h*A3)/24
         for k in 0..n*n {
@@ -430,7 +430,7 @@ where F: Fn(usize, &mut [f64]),
         }
         // 24/24
         for k in 0..n {
-            xpart[k*n + k] = 1.0;
+            xpart[k*n + k] += 1.0;
         }
 
         // (4*h^2*A2*A1 + 4*h^2*A2^2 + 4*h^2*A3*A2)/24
@@ -464,9 +464,9 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // UPart
-        b_fun(i, &mut b1);
-        b_fun(i, &mut b2);
-        b_fun(i + 1, &mut b3);
+        b_fun(i + idx, &mut b1);
+        b_fun(i + idx, &mut b2);
+        b_fun(i + 1 + idx, &mut b3);
 
         // (4*h*B1 + 16*h*B2 + 4*h*B3)/24
         for k in 0..n*m {
@@ -478,26 +478,26 @@ where F: Fn(usize, &mut [f64]),
         matmult(n, &a2, &b2, &mut a2b2);
         matmult(n, &a3, &b2, &mut a3b2);
         for k in 0..n*m {
-            upart[k] = dt * dt * (4.0 / 24.0) * (a2b1[k] + a2b2[k] + a3b2[k]);
+            upart[k] += dt * dt * (4.0 / 24.0) * (a2b1[k] + a2b2[k] + a3b2[k]);
         }
 
         // (2*h^3*A2^2*B1 + 2*h^3*A3*A2*B2)/24
         matmult(n, &a2a2, &b1, &mut a2a2b1);
         matmult(n, &a3a2, &b2, &mut a3a2b2);
         for k in 0..n*m {
-            upart[k] = dt.powi(3) * (2.0 / 24.0) * (a2a2b1[k] + a3a2b2[k]);
+            upart[k] += dt.powi(3) * (2.0 / 24.0) * (a2a2b1[k] + a3a2b2[k]);
         }
 
         // (h^4*A3*A2^2*B1)/24
         matmult(n, &a3a2a2, &b1, &mut a3a2a2b1);
         for k in 0..n*m {
-            upart[k] = dt.powi(4) * (1.0 / 24.0) * a3a2a2b1[k];
+            upart[k] += dt.powi(4) * (1.0 / 24.0) * a3a2a2b1[k];
         }
 
         for j in 0..n {
             for k in 0..m {
                 aeq_row_idxs[aeq_i] = (row + j) as i32;
-                aeq_col_idxs[aeq_i] = ((i - 1) * m + n * horizon + k) as i32;
+                aeq_col_idxs[aeq_i] = (i * m + n * horizon + k) as i32;
                 aeq_coefs[aeq_i] = upart[j * m + k];
                 aeq_i += 1;
             }
@@ -505,7 +505,112 @@ where F: Fn(usize, &mut [f64]),
     }
 }
 
-fn euler_constraints<F, G>(n: usize, m: usize, horizon: usize, dt: f64,
+// for RK2 we have
+// X_i+1 = X_i + k2
+// k1 = h * f(t, X_i)
+// k2 = h * f(t + h/2, X_i + k1/2)
+//
+// k1 = h * (A_i * X_i + B_i * U_i)
+// k2 = h * (A_i+.5 * (X_i + k1/2) + B_i+.5 * U_i)
+/*
+k1 := h * (A1 * X1 + B1 * U1);
+k2 := h * (A2 * (X1 + k1/2) + B2 * U1);
+X2 := X1 + k2;
+XPart := Coef(X2, X1, 1);
+UPart := Coef(X2, U1, 1);
+
+0 = XPart * X_i + UPart * U_i - X_i+1
+
+Simplify(XPart)
+(h^2*A2*A1 + 2*h*A2+2)/2
+Simplify(UPart)
+(h^2*A2*B1 + 2*h*B2)/2
+*/
+fn rk2_constraints<F, G>(n: usize, m: usize, idx: usize, horizon: usize, dt: f64,
+                         a_fun: &F, b_fun: &G,
+                         aeq_row_idxs: &mut [i32], aeq_col_idxs: &mut [i32],
+                         aeq_coefs: &mut [f64])
+where F: Fn(usize, &mut [f64]),
+      G: Fn(usize, &mut [f64]) {
+    let mut xpart = vec![0.0; n * n];
+    let mut upart = vec![0.0; n * m];
+
+    let mut a1 = vec![0.0; n * n];
+    let mut a2 = vec![0.0; n * n];
+
+    let mut a2a1 = vec![0.0; n * n];
+
+    let mut b1 = vec![0.0; n * m];
+    let mut b2 = vec![0.0; n * m];
+
+    let mut a2b1 = vec![0.0; n * m];
+
+    let mut aeq_i = n; // after initial conditions
+    for i in 0..horizon-1 {
+        // - X_i+1
+        let row = i * n + n;
+        for j in 0..n {
+            aeq_row_idxs[aeq_i] = (row + j) as i32;
+            aeq_col_idxs[aeq_i] = (row + j) as i32;
+            aeq_coefs[aeq_i] = -1.0;
+            aeq_i += 1;
+        }
+
+        // XPart * X_i
+        a_fun(i + idx, &mut a1);
+        a_fun(i + idx, &mut a2);
+
+        // h*A2
+        for k in 0..n*n {
+            xpart[k] = dt * a2[k];
+        }
+        // 2/2
+        for k in 0..n {
+            xpart[k*n + k] += 1.0;
+        }
+
+        // (h^2*A2*A1)/2
+        matmult(n, &a2, &a1, &mut a2a1);
+        for k in 0..n*n {
+            xpart[k] += dt * dt * 0.5 * a2a1[k];
+        }
+
+        for j in 0..n {
+            for k in 0..n {
+                aeq_row_idxs[aeq_i] = (row + j) as i32;
+                aeq_col_idxs[aeq_i] = (row - n + k) as i32;
+                aeq_coefs[aeq_i] = xpart[j * n + k];
+                aeq_i += 1;
+            }
+        }
+
+        // UPart
+        b_fun(i + idx, &mut b1);
+        b_fun(i + idx, &mut b2);
+
+        // h*B2
+        for k in 0..n*m {
+            upart[k] = dt * b2[k];
+        }
+
+        // (h^2*A2*B1)/2
+        matmult(n, &a2, &b1, &mut a2b1);
+        for k in 0..n*m {
+            upart[k] += dt * dt * 0.5 * a2b1[k];
+        }
+
+        for j in 0..n {
+            for k in 0..m {
+                aeq_row_idxs[aeq_i] = (row + j) as i32;
+                aeq_col_idxs[aeq_i] = (i * m + n * horizon + k) as i32;
+                aeq_coefs[aeq_i] = upart[j * m + k];
+                aeq_i += 1;
+            }
+        }
+    }
+}
+
+fn euler_constraints<F, G>(n: usize, m: usize, idx: usize, horizon: usize, dt: f64,
                            a_fun: &F, b_fun: &G,
                            aeq_row_idxs: &mut [i32], aeq_col_idxs: &mut [i32],
                            aeq_coefs: &mut [f64])
@@ -518,10 +623,9 @@ where F: Fn(usize, &mut [f64]),
     // X_i+1 = X_i + dt * (A_i * X_i + B_i * U_i)
     // X_i + dt * (A_i * X_i + B_i * U_i) - X_i+1 = 0
     let mut aeq_i = n; // after initial conditions
-    for i in 1..horizon {
+    for i in 0..horizon-1 {
         // - X_i+1
-        let row = i * n;
-        // copy_mat(n_dec, &mut a_eq, row, row, n, &neg_identity);
+        let row = i * n + n;
         for j in 0..n {
             aeq_row_idxs[aeq_i] = (row + j) as i32;
             aeq_col_idxs[aeq_i] = (row + j) as i32;
@@ -530,7 +634,7 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // dt * A_i * X_i
-        a_fun(i, &mut a_mat);
+        a_fun(i + idx, &mut a_mat);
         for k in 0..n*n {
             a_mat[k] *= dt;
         }
@@ -538,7 +642,6 @@ where F: Fn(usize, &mut [f64]),
         for k in 0..n {
             a_mat[k * n + k] += 1.0;
         }
-        // copy_mat(n_dec, &mut a_eq, row, row - n, n, &a_mat);
         for j in 0..n {
             for k in 0..n {
                 aeq_row_idxs[aeq_i] = (row + j) as i32;
@@ -549,15 +652,14 @@ where F: Fn(usize, &mut [f64]),
         }
 
         // dt * B_i * U_i
-        b_fun(i, &mut b_mat);
+        b_fun(i + idx, &mut b_mat);
         for k in 0..n*m {
             b_mat[k] *= dt;
         }
-        // copy_mat(n_dec, &mut a_eq, row, (i - 1) * m + n * horizon, m, &b_mat);
         for j in 0..n {
             for k in 0..m {
                 aeq_row_idxs[aeq_i] = (row + j) as i32;
-                aeq_col_idxs[aeq_i] = ((i - 1) * m + n * horizon + k) as i32;
+                aeq_col_idxs[aeq_i] = (i * m + n * horizon + k) as i32;
                 aeq_coefs[aeq_i] = b_mat[j * m + k];
                 aeq_i += 1;
             }
@@ -591,7 +693,6 @@ where F: Fn(usize, &mut [f64]),
     // not over the whole time span, but just over the horizon
     let n_dec = n * horizon + m * (horizon - 1);
     let mut quadratic_cost_diag = vec![0.0; n_dec];
-    let linear_cost = vec![0.0; n_dec]; // stays zeros
     for i in 0..horizon {
         quadratic_cost_diag[i*n..i*n+n].copy_from_slice(&q_diag);
     }
@@ -649,6 +750,7 @@ where F: Fn(usize, &mut [f64]),
     xs[0].copy_from_slice(x0);
     let mut x_new = vec![0.0; n];
 
+    let linear_cost = vec![0.0; n_dec];
     let mut qp = QuadProg::new(n_dec, &linear_cost, &lb, &ub, 0, n_eq);
     qp.diagonal_quadratic_cost(&quadratic_cost_diag);
 
@@ -671,19 +773,54 @@ where F: Fn(usize, &mut [f64]),
     }
 
     for k in 0..n_steps-1 {
+        let horizon_left = n_steps - k;
+        let valid_horizon = if horizon_left < horizon { horizon_left } else { horizon };
+
         // for initial conditions, all other values stay at 0
         b_eq[0..n].copy_from_slice(&xs[k]);
         for i in 0..n {
             b_eq[i] -= ref_x[n_steps * i + k];
         }
-        euler_constraints(n, m, horizon, dt, a_fun, b_fun,
+        // zero invalid horizon coefficients
+        if valid_horizon < horizon {
+            let start_invalid = n + (n * (valid_horizon - 1)) * (n + m + 1);
+            for i in start_invalid..aeq_coefs_n {
+                aeq_coefs[i] = 0.0;
+            }
+            // for i in valid_horizon..horizon {
+            //     for j in 0..n {
+            //         quadratic_cost_diag[i * n + j] = 0.0;
+            //     }
+            //     let idx = horizon * n + (i - 1) * m;
+            //     for j in 0..m {
+            //         quadratic_cost_diag[idx + j] = 0.0;
+            //     }
+            // }
+        }
+        euler_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
                           &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
-        // rk4_constraints(n, m, horizon, dt, a_fun, b_fun,
+        // rk4_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
         //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
-        qp.sparse_eq_constraints(&aeq_row_idxs, &aeq_col_idxs, &aeq_coefs, &b_eq);
+        // rk2_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
+        //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
 
-        let horizon_left = n_steps - k + 1;
-        let valid_horizon = if horizon_left < horizon { horizon_left } else { horizon };
+        // if k == 0 {
+        //     let mut test_mat = vec![0.0; n_dec * n_eq];
+        //     for i in 0..aeq_coefs_n {
+        //         test_mat[aeq_row_idxs[i] as usize * n_dec + aeq_col_idxs[i] as usize] = aeq_coefs[i];
+        //     }
+        //     print!("[");
+        //     for i in 0..n_eq {
+        //         for j in 0..n_dec {
+        //             print!("{} ", test_mat[i * n_dec + j]);
+        //         }
+        //         println!("; ");
+        //     }
+        //     println!("]");
+        //     panic!("Done for now");
+        // }
+
+        qp.sparse_eq_constraints(&aeq_row_idxs, &aeq_col_idxs, &aeq_coefs, &b_eq);
 
         // bounds are in terms of the reference
         if x_lb.len() > 0 {
@@ -718,6 +855,13 @@ where F: Fn(usize, &mut [f64]),
         }
         qp.bounds(&lb, &ub);
 
+        // print!("[");
+        // for i in 0..n_dec {
+        //     print!("{}; ", ub[i]);
+        // }
+        // println!("]");
+        // panic!("Done for now");
+
         if let Some(_) = qp.run(&mut solved_vars) {
             // println!("{}", obj_val);
             // println!("{:?}", solved_vars);
@@ -729,11 +873,13 @@ where F: Fn(usize, &mut [f64]),
                 us[k][i] += ref_u[n_steps * i + k];
             }
 
+            // print!("{:.10} ", us[k][0]);
+
             // pass through "real world" model to get our next state
             let mut integrate_fun = |t: f64, x: &[f64], x_new: &mut[f64]| {
                 ode_fun(k as f64 * dt + t, x, &us[k], x_new);
             };
-            rk4_integrate(dt / 10.0, 10, &mut integrate_fun, &xs[k], &mut x_new);
+            rk4_integrate(dt / 8.0, 8, &mut integrate_fun, &xs[k], &mut x_new);
             xs[k + 1].copy_from_slice(&x_new);
         } else {
             panic!("Quadratic program could not be solved on timestep {}", k);
@@ -959,16 +1105,57 @@ fn mpc_test() {
     let n = 3;
     let m = 2;
     let total_time = 6.0;
-    let n_steps = 601;
+    let ref_steps = 601;
+    let step_factor = 1;
+    let n_steps = ref_steps * step_factor;
+    let horizon = 21 * step_factor;
 
+    let mut base_ref_x = vec![0.0; n * ref_steps];
+    fill_from_csv("ref_x.csv", &mut base_ref_x).unwrap();
     let mut ref_x = vec![0.0; n * n_steps];
-    fill_from_csv("ref_x.csv", &mut ref_x).unwrap();
+    let mut idx = 0;
+    for _i in 0..n {
+        for _j in 0..ref_steps-1 {
+            let ref_idx = idx / step_factor;
+            let ref_val = base_ref_x[ref_idx];
+            let delta = (base_ref_x[ref_idx + 1] - ref_val) / step_factor as f64;
+            for k in 0..step_factor {
+                ref_x[idx] = ref_val + k as f64 * delta;
+                idx += 1;
+            }
+        }
+        // last element just repeats
+        let ref_val = base_ref_x[idx / step_factor];
+        for _k in 0..step_factor {
+            ref_x[idx] = ref_val;
+            idx += 1;
+        }
+    }
 
+    let mut base_ref_u = vec![0.0; m * ref_steps];
+    fill_from_csv("ref_u.csv", &mut base_ref_u).unwrap();
     let mut ref_u = vec![0.0; m * n_steps];
-    fill_from_csv("ref_u.csv", &mut ref_u).unwrap();
+    let mut idx = 0;
+    for _i in 0..m {
+        for _j in 0..ref_steps-1 {
+            let ref_idx = idx / step_factor;
+            let ref_val = base_ref_u[ref_idx];
+            let delta = (base_ref_u[ref_idx + 1] - ref_val) / step_factor as f64;
+            for k in 0..step_factor {
+                ref_u[idx] = ref_val + k as f64 * delta;
+                idx += 1;
+            }
+        }
+        // last element just repeats
+        let ref_val = base_ref_u[idx / step_factor];
+        for _k in 0..step_factor {
+            ref_u[idx] = ref_val;
+            idx += 1;
+        }
+    }
 
-    // let r_xs = &ref_x[0..n_steps];
-    // let r_ys = &ref_x[n_steps..n_steps*2];
+    let r_xs = &ref_x[0..n_steps];
+    let r_ys = &ref_x[n_steps..n_steps*2];
     let r_psis = &ref_x[n_steps*2..n_steps*3];
     let r_us = &ref_u[0..n_steps];
     let r_deltas = &ref_u[n_steps..n_steps*2];
@@ -977,8 +1164,13 @@ fn mpc_test() {
     let rb = 1.5; // rear wheel to center of mass
 
     let a_fun = |idx: usize, a: &mut [f64]| {
-        // only bother setting non-zero elements
-        // since we know "a" will be initialized to zeros
+        for i in 0..9 { a[i] = 0.0; }
+        // let u_val = r_us[idx];
+        // let psi_val = r_psis[idx];
+        // let delta_val = r_deltas[idx];
+        // let f1 = -r_psis[idx].sin();
+        // let f2 = r_deltas[idx].tan();
+        // let f3 = r_psis[idx].cos();
         a[2] = r_us[idx] * (-r_psis[idx].sin() - rb / l * r_deltas[idx].tan() * r_psis[idx].cos()); // dpsi/du
         a[5] = r_us[idx] * (r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin()); // dpsi/ddelta
     };
@@ -1001,15 +1193,9 @@ fn mpc_test() {
     let x0 = [0.25, -0.25, -0.1];
 
     let t_span = (0..n_steps).map(|i: usize| i as f64 * total_time / (n_steps - 1) as f64).collect::<Vec<_>>();
-    let dt = t_span[1] - t_span[0];
     let q = vec![1., 1., 0.5];
     let r = vec![0.1, 0.01];
 
-    let horizon = 11;
-    // let a_x_constraints = vec![1., 0., -1., 0., 0., 1., 0., -1.];
-    // let b_x_constraints = vec![2., 2., 2., 2.];
-    // let a_u_constraints = vec![1., -1.];
-    // let b_u_constraints = vec![10., 10.];
     let a_x_constraints = vec![];
     let b_x_constraints = vec![];
     let a_u_constraints = vec![];
@@ -1021,10 +1207,43 @@ fn mpc_test() {
     let u_ub = vec![1.0, 0.5];
 
     let start_time = precise_time_s();
-    let (xs, us) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon, &ref_x, &ref_u, &ode_fun,
+    let (xs, _us) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon, &ref_x, &ref_u, &ode_fun,
                           &a_x_constraints, &b_x_constraints, &a_u_constraints, &b_u_constraints,
                           &x_lb, &x_ub, &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
+
+    // caclulate max distance error between the actual and nominal trajectories,
+    // when the x value of the actual trajectory is between or equal to 3 and 4 m
+    let mut dist_errors = vec![0.0; n_steps];
+    let mut max_dist_error = 0.0;
+    for i in 0..xs.len() {
+        let dx = xs[i][0] - r_xs[i];
+        let dy = xs[i][1] - r_ys[i];
+        let dist_err = (dx * dx + dy * dy).sqrt();
+        dist_errors[i] = dist_err;
+        if xs[i][0] >= 3.0 && xs[i][0] <= 4.0 {
+            if dist_err > max_dist_error {
+                max_dist_error = dist_err;
+            }
+        }
+    }
+    println!("Max distance error: {}", max_dist_error);
+
+    if false {
+        let ax = Axes2D::new()
+            .add(Line2D::new("")
+                .data(&t_span[199..599], &dist_errors[199..599])
+                .color("blue")
+                .marker("+")
+                .linestyle("-")
+                .linewidth(1.0))
+            .xlabel("time")
+            .ylabel("error");
+        let mut mpl = Matplotlib::new().unwrap();
+        ax.apply(&mut mpl).unwrap();
+        mpl.show().unwrap();
+        mpl.wait().unwrap();
+    }
 
     if true {
         let mut xs1 = vec![0.0; n_steps];
@@ -1034,27 +1253,6 @@ fn mpc_test() {
             ys1[i] = xs[i][1];
         }
 
-        // let mut rk4_out = vec![0.0; n_steps * n];
-        // let mut integrate_fun = |t: f64, x: &[f64], x_new: &mut[f64]| {
-        //     let t_idx = (t / dt) as usize;
-        //     ode_fun(t, x, &us[t_idx], x_new);
-        // };
-        // rk4_integrate(dt, n_steps - 1, &mut integrate_fun, &x0, &mut rk4_out);
-        //
-        // let mut xs2 = vec![0.0; n_steps];
-        // let mut ys2 = vec![0.0; n_steps];
-        // for i in 0..n_steps {
-        //     xs2[i] = rk4_out[i*n];
-        //     ys2[i] = rk4_out[i*n+1];
-        // }
-
-        let mut xs3 = vec![0.0; n_steps];
-        let mut ys3 = vec![0.0; n_steps];
-        for i in 0..n_steps {
-            xs3[i] = ref_x[i];
-            ys3[i] = ref_x[n_steps+i];
-        }
-
         let ax = Axes2D::new()
             .add(Line2D::new("")
                 .data(&xs1, &ys1)
@@ -1062,14 +1260,8 @@ fn mpc_test() {
                 // .marker("+")
                 .linestyle("-")
                 .linewidth(1.0))
-            // .add(Line2D::new("")
-            //     .data(&xs2, &ys2)
-            //     .color("green")
-            //     .marker("x")
-            //     .linestyle("-")
-            //     .linewidth(1.0))
             .add(Line2D::new("")
-                .data(&xs3, &ys3)
+                .data(&r_xs, &r_ys)
                 .color("orange")
                 .linestyle("-")
                 .linewidth(1.0))

@@ -141,6 +141,7 @@ int qp_create(int n, double *f, double *lb, double *ub, int n_le, int n_eq, CPXE
 
     // CPXsetintparam(env, CPXPARAM_QPMethod, CPX_ALG_NET);
     CPXsetintparam(env, CPX_PARAM_FEASOPTMODE, CPX_FEASOPT_MIN_QUAD);
+    CPXsetdblparam(env, CPXPARAM_Simplex_Tolerances_Optimality, 1e-14);
 
     // screen update thing
     // status = CPXsetintparam(env, CPXPARAM_ScreenOutput, CPX_ON);
@@ -358,6 +359,8 @@ int qp_run(CPXENVptr env, CPXLPptr qp, double *obj_val, double *x_out) {
     int solstat;
     status = CPXsolution(env, qp, &solstat, obj_val, x_out, NULL, NULL, NULL);
     if (status || solstat != CPX_STAT_OPTIMAL) {
+        printf(".");
+
         int n_constraints = CPXgetnumrows(env, qp);
         double *rhs_relaxation_cost = malloc(sizeof(double) * n_constraints);
         // initial condition constraints can not be relaxed
