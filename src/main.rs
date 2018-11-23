@@ -1108,7 +1108,7 @@ fn mpc_test() {
     let ref_steps = 601;
     let step_factor = 1;
     let n_steps = ref_steps * step_factor;
-    let horizon = 21 * step_factor;
+    let horizon = 11 * step_factor;
 
     let mut base_ref_x = vec![0.0; n * ref_steps];
     fill_from_csv("ref_x.csv", &mut base_ref_x).unwrap();

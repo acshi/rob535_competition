@@ -139,9 +139,9 @@ int qp_create(int n, double *f, double *lb, double *ub, int n_le, int n_eq, CPXE
     CPXENVptr env = CPXopenCPLEX(&status);
     if (cplex_check_error(env, status)) { return status; }
 
-    // CPXsetintparam(env, CPXPARAM_QPMethod, CPX_ALG_NET);
+    CPXsetintparam(env, CPXPARAM_QPMethod, CPX_ALG_PRIMAL); // BARRIER is ~4x slower than the other algs
     CPXsetintparam(env, CPX_PARAM_FEASOPTMODE, CPX_FEASOPT_MIN_QUAD);
-    CPXsetdblparam(env, CPXPARAM_Simplex_Tolerances_Optimality, 1e-14);
+    // CPXsetdblparam(env, CPXPARAM_Simplex_Tolerances_Optimality, 1e-14);
 
     // screen update thing
     // status = CPXsetintparam(env, CPXPARAM_ScreenOutput, CPX_ON);
