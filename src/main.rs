@@ -1122,6 +1122,92 @@ fn fill_from_csv(filename: &str, vals: &mut [f64]) -> std::io::Result<()> {
     Ok(())
 }
 
+fn load_test_track() -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let track_n = 246;
+    let mut bl = vec![0.0; 2 * track_n];
+    let mut br = vec![0.0; 2 * track_n];
+    let mut cline = vec![0.0; 2 * track_n];
+    let mut theta = vec![0.0; track_n];
+    fill_from_csv("bl.csv", &mut bl).unwrap();
+    fill_from_csv("br.csv", &mut br).unwrap();
+    fill_from_csv("cline.csv", &mut cline).unwrap();
+    fill_from_csv("theta.csv", &mut theta).unwrap();
+
+    (bl, br, cline, theta)
+}
+
+fn trajectory_stays_on_track(x_all: &[f64]) -> bool {
+    let n = 6;
+    let n_steps = x_all.len() / n;
+    let (bls, brs, clines, thetas) = load_test_track();
+    let track_n = thetas.len();
+    let mut trajectory_i = 0;
+    let mut track_i = 0;
+
+    let mut trajectory_x = vec![0.0; n_steps];
+    let mut trajectory_y = vec![0.0; n_steps];
+    for i in 0..n_steps {
+        trajectory_x[i] = x_all[i * n];
+        trajectory_y[i] = x_all[i * n + 2];
+    }
+
+    let mut status = true;
+
+    while trajectory_i < n_steps {
+        let x = x_all[trajectory_i * n];
+        let y = x_all[trajectory_i * n + 2];
+        let theta = thetas[track_i];
+        let (sint, cost) = theta.sin_cos();
+        // project center of mass onto track axis
+        let car_forward = sint * y + cost * x;
+        let car_sideways = sint * x + cost * y;
+
+        // and then the sides of the section of track
+        let l_sideways = sint * bls[track_i] + cost * bls[track_n + track_i];
+        let r_sideways = sint * brs[track_i] + cost * brs[track_n + track_i];
+        let forward = sint * clines[track_n + track_i] + cost * clines[track_i];
+        // and where the next section starts in the forward dimension
+        let next_forward = sint * clines[track_n + track_i + 1] + cost * clines[track_i + 1];
+
+        if car_forward > next_forward {
+            track_i += 1;
+            continue;
+        } else if car_forward < forward {
+            track_i -= 1;
+            continue;
+        }
+        if car_sideways < l_sideways || car_sideways > r_sideways {
+            status = false;
+            break;
+        }
+        trajectory_i += 1;
+    }
+
+    println!("Stays on track: {}", status);
+
+    let ax = Axes2D::new()
+        .add(Line2D::new("")
+            .data(&bls[0..track_n], &bls[track_n..track_n*2])
+            .color("blue")
+            .linestyle("-"))
+        .add(Line2D::new("")
+            .data(&brs[0..track_n], &brs[track_n..track_n*2])
+            .color("blue")
+            .linestyle("-"))
+        .add(Line2D::new("")
+            .data(&trajectory_x, &trajectory_y)
+            .color("red")
+            .linestyle("-"))
+        .xlabel("x")
+        .ylabel("y");
+    let mut mpl = Matplotlib::new().unwrap();
+    ax.apply(&mut mpl).unwrap();
+    mpl.show().unwrap();
+    mpl.wait().unwrap();
+
+    status
+}
+
 fn mpc_test() {
     let n = 3;
     let m = 2;
@@ -1312,6 +1398,7 @@ fn bike_test() {
         }
         println!("");
     }
+    trajectory_stays_on_track(&x_all);
 }
 
 fn main() {
