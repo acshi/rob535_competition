@@ -797,10 +797,10 @@ where F: Fn(f64, &mut [f64]),
             //     }
             // }
         }
-        // euler_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
-        //                   &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
-        rk4_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
-                        &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
+        euler_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
+                          &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
+        // rk4_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
+        //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
         // rk2_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
         //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
 
@@ -1108,7 +1108,7 @@ fn mpc_test() {
     let ref_steps = 601;
     // extra 2x factor for the half-steps needed by rk2/rk4
     let itermediate_steps = 2;
-    let base_step_factor = 2;
+    let base_step_factor = 1;
     let step_factor = base_step_factor * itermediate_steps;
     let total_steps = ref_steps * step_factor;
     let n_steps = total_steps / itermediate_steps;
