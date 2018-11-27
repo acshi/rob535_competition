@@ -327,6 +327,26 @@ int qp_dense_eq_constraints(CPXENVptr env, CPXLPptr qp, int n_eq, double *coefs,
     return 0;
 }
 
+int qp_quadratic_geq(CPXENVptr env, CPXLPptr qp, int n_lin, int n_quad, double rhs,
+                     int *lin_idxs, double *lin_vals,
+                     int *quad_rows, int *quad_cols, double *quad_vals) {
+    int status = CPXchgprobtype(env, qp, CPXPROB_QCP);
+    if (cplex_check_error(env, status)) { return status; }
+
+    status = CPXaddqconstr(env, qp, n_lin, n_quad, rhs, 'G', lin_idxs, lin_vals, quad_rows, quad_cols, quad_vals, NULL);
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
+}
+
+// inclusive range
+int qp_delete_quadratic_geqs(CPXENVptr env, CPXLPptr qp, int idx_low, int idx_high) {
+    int status = CPXdelqconstrs(env, qp, idx_low, idx_high);
+    if (cplex_check_error(env, status)) { return status; }
+
+    return 0;
+}
+
 // the right-hand side should be included with column indices of -1.
 int qp_sparse_eq_constraints(CPXENVptr env, CPXLPptr qp, int n_eq, int n_coefs, int *constraint_indices, int *column_indices, double *coefs, double *rhs) {
     // we organize the == constraints after then <= ones

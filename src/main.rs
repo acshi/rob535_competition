@@ -44,6 +44,10 @@ extern {
     fn qp_sparse_eq_constraints(env: *mut c_void, qp: *mut c_void, n_eq: i32, n_coefs: i32,
                                 constraint_indices: *const i32, column_indices: *const i32,
                                 coefs: *const f64, rhs: *const f64) -> i32;
+    fn qp_quadratic_geq(env: *mut c_void, qp: *mut c_void, n_lin: i32, n_quad: i32, rhs: f64,
+                         lin_idxs: *const i32, lin_vals: *const f64,
+                         quad_rows: *const i32, quad_cols: *const i32, quad_vals: *const f64) -> i32;
+    fn qp_delete_quadratic_geqs(env: *mut c_void, qp: *mut c_void, idx_low: i32, idx_high: i32) -> i32;
     fn qp_run(env: *mut c_void, qp: *mut c_void, obj_val: *mut f64, x_out: *mut f64) -> i32;
     fn qp_destroy(env: *mut c_void, qp: *mut c_void) -> i32;
 }
@@ -55,6 +59,7 @@ struct QuadProg {
     n: i32,
     n_le: i32,
     n_eq: i32,
+    n_quad_geqs: i32,
 }
 
 #[allow(dead_code)]
@@ -76,7 +81,7 @@ impl QuadProg {
                 panic!();
             }
         }
-        QuadProg { env, qp, n, n_le, n_eq }
+        QuadProg { env, qp, n, n_le, n_eq, n_quad_geqs: 0 }
     }
 
     fn bounds(&mut self, lb: &[f64], ub: &[f64]) {
@@ -160,6 +165,36 @@ impl QuadProg {
                 panic!();
             }
         }
+    }
+
+    fn quadratic_geq(&mut self, rhs: f64, lin_idxs: &[i32], lin_vals: &[f64],
+                     quad_rows: &[i32], quad_cols: &[i32], quad_vals: &[f64]) {
+        let n_lin = lin_idxs.len();
+        assert_eq!(lin_vals.len(), n_lin);
+        let n_quad = quad_rows.len();
+        assert_eq!(quad_cols.len(), n_quad);
+        assert_eq!(quad_vals.len(), n_quad);
+        unsafe {
+            let status = qp_quadratic_geq(self.env, self.qp, n_lin as i32, n_quad as i32, rhs,
+                                          lin_idxs.as_ptr(), lin_vals.as_ptr(),
+                                          quad_rows.as_ptr(), quad_cols.as_ptr(), quad_vals.as_ptr());
+
+            if status != 0 {
+                panic!();
+            }
+        }
+
+        self.n_quad_geqs += 1;
+    }
+
+    fn clear_quadratic_geqs(&mut self) {
+        unsafe {
+            let status = qp_delete_quadratic_geqs(self.env, self.qp, 0, self.n_quad_geqs);
+            if status != 0 {
+                panic!();
+            }
+        }
+        self.n_quad_geqs = 0;
     }
 
     // even on failure, xs may be mutated
