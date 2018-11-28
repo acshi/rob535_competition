@@ -1,7 +1,7 @@
 extern crate libc;
 extern crate lapack;
 extern crate blas;
-extern crate openblas_src;
+//extern crate openblas_src;
 extern crate rustplotlib;
 extern crate time;
 
@@ -18,8 +18,10 @@ fn main() {
     if false {
         lqr_test();
     }
-    if false {
+    if true {
         mpc_test();
     }
-    bike_test();
+    if false {
+        bike_test();
+    }
 }

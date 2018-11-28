@@ -8,7 +8,6 @@ use std::slice;
 
 extern crate lapack;
 extern crate blas;
-extern crate openblas_src;
 use lapack::*;
 use blas::*;
 
@@ -19,7 +18,8 @@ use rustplotlib::backend::Matplotlib;
 extern crate time;
 use time::precise_time_s;
 
-#[link(name = "cplex", kind = "static")]
+#[cfg_attr(target_os = "linux", link(name = "cplex", kind = "static"))]
+#[cfg_attr(target_os = "windows", link(name = "cplex1280", kind = "static"))]
 #[link(name = "cplexrust", kind = "static")]
 #[allow(dead_code)]
 extern {
