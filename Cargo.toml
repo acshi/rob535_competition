@@ -13,6 +13,15 @@ blas = "0.20.0"
 openblas-src = "0.6.1"
 time = "*"
 
+[lib]
+name="rob535_competition"
+path = "src/lib.rs"
+crate-type=["staticlib"]
+
+[[bin]]
+name = "rob535_competition"
+path = "src/main.rs"
+
 [build-dependencies]
 cc = "1.0"
 
