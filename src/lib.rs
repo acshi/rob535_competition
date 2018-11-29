@@ -1159,23 +1159,26 @@ fn trajectory_stays_on_track(x_all: &[f64]) -> bool {
 }
 
 #[no_mangle]
-pub extern fn trajectory_for_obstacles(n_obs: i32, obs_x: *const f64, obs_y: *const f64,
+pub extern fn trajectory_for_obstacles(n_track: i32, bl: *const f64, br: *const f64,
+                                       cline: *const f64, theta: *const f64,
+                                       n_obs: i32, obs_x: *const f64, obs_y: *const f64,
                                        n_controls: i32, controls: *mut f64) {
-    println!("Rust function beginning");
+    let n_track = n_track as usize;
     let n_obs = n_obs as usize;
     let n_controls = n_controls as usize;
-    println!("Before slice creation");
-    let obs_x = unsafe { slice::from_raw_parts(obs_x, n_obs) };
-    let obs_y = unsafe { slice::from_raw_parts(obs_y, n_obs) };
-    let controls = unsafe { slice::from_raw_parts_mut(controls, 2 * n_controls) };
-    println!("Before slice assigning");
+
+    let bl = unsafe { slice::from_raw_parts(bl, n_track) };
+    let br = unsafe { slice::from_raw_parts(br, n_track) };
+    let cline = unsafe { slice::from_raw_parts(cline, n_track) };
+    let theta = unsafe { slice::from_raw_parts(theta, n_track) };
+    let obs_x = unsafe { slice::from_raw_parts(obs_x, n_obs * 4) };
+    let obs_y = unsafe { slice::from_raw_parts(obs_y, n_obs * 4) };
+    let controls = unsafe { slice::from_raw_parts_mut(controls, n_controls * 2) };
     for i in 0..n_controls {
         controls[i] = i as f64;
     }
 
     mpc_test();
-
-    println!("Before return");
 }
 
 pub fn quadprog_test() {
