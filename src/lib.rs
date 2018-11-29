@@ -1052,7 +1052,7 @@ fn is_float_digit(c: char) -> bool {
 }
 
 fn fill_from_csv(filename: &str, vals: &mut [f64]) -> std::io::Result<()> {
-    let mut f = File::open(filename)?;
+    let mut f = File::open(filename).expect("Could not open {}", filename));
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;
 
