@@ -1,0 +1,13 @@
+[package]
+name = "potential_field"
+version = "0.1.0"
+authors = ["Max Krogius <mkrogius@umich.edu>"]
+
+[dependencies]
+libc = "0.2.0"
+
+[lib]
+name = "potential_field"
+path = "src/potential_field.rs"
+crate-type=["staticlib"]
+

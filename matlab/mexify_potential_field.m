@@ -1,0 +1,1 @@
+mex -ldl potential_field.c libpotential_field.a
