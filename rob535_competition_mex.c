@@ -3,10 +3,10 @@
 // on windows needs some lib's explicitly specified. not sure why it doesn't auto-detect...
 // mex -g rob535_competition_mex.c target/debug/rob535_competition.lib WS2_32.Lib Userenv.lib
 
-extern void trajectory_for_obstacles(int n_track, const double *bl, const double *br,
-                                     const double *cline, const double *theta,
-                                     int n_obs, const double *obs_x, const double *obs_y,
-                                     int n_controls, double *controls);
+extern void solve_obstacle_problem(int n_track, const double *bl, const double *br,
+                                   const double *cline, const double *thetas,
+                                   int n_obs, const double *obs_x, const double *obs_y,
+                                   int n_controls, double *controls);
 
 #define MAX_CONTROL_STEPS 1024
 
@@ -34,7 +34,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     plhs[0] = mxCreateDoubleMatrix(MAX_CONTROL_STEPS, 2, mxREAL);
     double *controls = mxGetPr(plhs[0]);
 
-    trajectory_for_obstacles(n_track, bl, br, cline, theta,
-                             n_obs, obs_x, obs_y,
-                             MAX_CONTROL_STEPS, controls);
+    solve_obstacle_problem(n_track, bl, br, cline, theta,
+                           n_obs, obs_x, obs_y,
+                           MAX_CONTROL_STEPS, controls);
 }

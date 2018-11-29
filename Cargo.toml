@@ -2,7 +2,6 @@
 name = "rob535_competition"
 version = "0.1.0"
 authors = ["Acshi Haggenmiller <acshikh@umich.edu>"]
-# links = "cplex"
 build = "build.rs"
 
 [dependencies]
@@ -10,7 +9,6 @@ libc = "0.2.0"
 rustplotlib = "0.0.4"
 lapack = "0.16.0"
 blas = "0.20.0"
-#openblas-src = { version = "0.6.1", features = ["static", "system"] }
 time = "*"
 
 [lib]

@@ -6,7 +6,7 @@ extern crate rustplotlib;
 extern crate time;
 
 mod lib;
-pub use lib::trajectory_for_obstacles;
+pub use lib::solve_obstacle_problem;
 use lib::*;
 
 fn main() {
@@ -18,10 +18,11 @@ fn main() {
     if false {
         lqr_test();
     }
-    if true {
+    if false {
         mpc_test();
     }
     if false {
         bike_test();
     }
+    run_problem1();
 }
