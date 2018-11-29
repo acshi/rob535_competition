@@ -1161,14 +1161,21 @@ fn trajectory_stays_on_track(x_all: &[f64]) -> bool {
 #[no_mangle]
 pub extern fn trajectory_for_obstacles(n_obs: i32, obs_x: *const f64, obs_y: *const f64,
                                        n_controls: i32, controls: *mut f64) {
+    println!("Rust function beginning");
     let n_obs = n_obs as usize;
     let n_controls = n_controls as usize;
+    println!("Before slice creation");
     let obs_x = unsafe { slice::from_raw_parts(obs_x, n_obs) };
     let obs_y = unsafe { slice::from_raw_parts(obs_y, n_obs) };
     let controls = unsafe { slice::from_raw_parts_mut(controls, 2 * n_controls) };
+    println!("Before slice assigning");
     for i in 0..n_controls {
-        controls[i] = obs_x[0] * 0.00001 + obs_y[0] * 0.00001;
+        controls[i] = i as f64;
     }
+
+    mpc_test();
+
+    println!("Before return");
 }
 
 pub fn quadprog_test() {
