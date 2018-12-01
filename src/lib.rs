@@ -708,8 +708,8 @@ fn mpc_ltv<F, G, H>(a_fun: &F, b_fun: &G, q_diag: &[f64], r_diag: &[f64],
                     a_u_constraints: &[f64], b_u_constraints: &[f64],
                     x_lb: &[f64], x_ub: &[f64],
                     u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
-where F: Fn(f64, &mut [f64]),
-      G: Fn(f64, &mut [f64]),
+where F: Fn(f64, usize, &[f64], &mut [f64]),
+      G: Fn(f64, usize, &[f64], &mut [f64]),
       H: Fn(f64, &[f64], &[f64], &mut[f64]) {
     let n = x0.len();
     assert_eq!(q_diag.len(), n);
@@ -820,28 +820,25 @@ where F: Fn(f64, &mut [f64]),
             b_eq[i] -= ref_x[(n_steps * i + k) * 2];
         }
         // zero invalid horizon coefficients
-        if valid_horizon < horizon {
-            let start_invalid = n + (n * (valid_horizon - 1)) * (n + m + 1);
-            for i in start_invalid..aeq_coefs_n {
-                aeq_coefs[i] = 0.0;
-            }
-            // for i in valid_horizon..horizon {
-            //     for j in 0..n {
-            //         quadratic_cost_diag[i * n + j] = 0.0;
-            //     }
-            //     let idx = horizon * n + (i - 1) * m;
-            //     for j in 0..m {
-            //         quadratic_cost_diag[idx + j] = 0.0;
-            //     }
-            // }
+        // perhaps not helpful!! -- without this the last constraint will become duplicated
+        // as if we want the 'vehicle' to stop at the end state... which may be a good thing!
+        // for whatever reason, zero-ing here causes trouble...
+        // if valid_horizon < horizon {
+        //     let start_invalid = n + (n * (valid_horizon - 1)) * (n + m + 1);
+        //     for i in start_invalid..aeq_coefs_n {
+        //         aeq_coefs[i] = 0.0;
+        //     }
+        // }
+        {
+            let a_fun = &|idx: f64, a: &mut [f64]| a_fun(idx, k, &xs[k], a);
+            let b_fun = &|idx: f64, b: &mut [f64]| b_fun(idx, k, &xs[k], b);
+            euler_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
+                              &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
+            // rk4_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
+            //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
+            // rk2_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
+            //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
         }
-        euler_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
-                          &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
-        // rk4_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
-        //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
-        // rk2_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
-        //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
-
         // if k == 0 {
         //     let mut test_mat = vec![0.0; n_dec * n_eq];
         //     for i in 0..aeq_coefs_n {
@@ -1156,6 +1153,7 @@ fn trajectory_stays_on_track(x_all: &[f64]) -> bool {
     status
 }
 
+#[allow(dead_code)]
 struct TrackProblem<'a> {
     bl: &'a [f64],
     br: &'a [f64],
@@ -1170,26 +1168,80 @@ struct TrackProblem<'a> {
 pub extern fn solve_obstacle_problem(n_track: i32, bl: *const f64, br: *const f64,
                                      cline: *const f64, thetas: *const f64,
                                      n_obs: i32, obs_x: *const f64, obs_y: *const f64,
-                                     n_controls: i32, controls: *mut f64) {
+                                     n_controls: *mut i32, controls: *mut f64) {
     let n_track = n_track as usize;
     let n_obs = n_obs as usize;
-    let n_controls = n_controls as usize;
+    let n_max_controls = unsafe { *n_controls as usize };
 
-    let bl = unsafe { slice::from_raw_parts(bl, n_track) };
-    let br = unsafe { slice::from_raw_parts(br, n_track) };
-    let cline = unsafe { slice::from_raw_parts(cline, n_track) };
+    let bl = unsafe { slice::from_raw_parts(bl, n_track * 2) };
+    let br = unsafe { slice::from_raw_parts(br, n_track * 2) };
+    let cline = unsafe { slice::from_raw_parts(cline, n_track * 2) };
     let thetas = unsafe { slice::from_raw_parts(thetas, n_track) };
     let obs_x = unsafe { slice::from_raw_parts(obs_x, n_obs * 4) };
     let obs_y = unsafe { slice::from_raw_parts(obs_y, n_obs * 4) };
-    let controls = unsafe { slice::from_raw_parts_mut(controls, n_controls * 2) };
+    let controls = unsafe { slice::from_raw_parts_mut(controls, n_max_controls * 2) };
 
     let tp = TrackProblem { bl, br, cline, thetas, n_obs, obs_x, obs_y };
 
-    solve_control_problem(tp, controls);
+    let n_used_controls = solve_control_problem(tp, controls);
+    unsafe {
+        *n_controls = n_used_controls as i32;
+    }
 }
 
-fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) {
-    let n_max_controls = controls.len() / 2;
+trait FloatIterExt {
+    fn float_max(&mut self) -> f64;
+    fn float_min(&mut self) -> f64;
+}
+
+impl<'a, T> FloatIterExt for T where T: Iterator<Item=&'a f64> {
+    fn float_max(&mut self) -> f64 {
+        self.fold(f64::NAN, |a: f64, b: &f64| if a > *b { a } else { *b })
+    }
+    fn float_min(&mut self) -> f64 {
+        self.fold(f64::NAN, |a: f64, b: &f64| if a < *b { a } else { *b })
+    }
+}
+
+fn sq_diff(idx: usize, r_xs: &[f64], r_ys: &[f64], x: &[f64]) -> f64 {
+    (r_xs[idx] - x[0]).powi(2) + (r_ys[idx] - x[1]).powi(2)
+}
+
+fn next_track_idx(old_idx: usize, r_xs: &[f64], r_ys: &[f64], x: &[f64]) -> usize {
+    // if we are far behind (or ahead of) the trajectory (old_idx), then we should use something closer to
+    // us as the reference.
+    let dist_sq_lim = 1.0;
+    let dist_sq = sq_diff(old_idx, r_xs, r_ys, x);
+    if dist_sq < dist_sq_lim {
+        return old_idx;
+    }
+    // are we behind or ahead?
+    let delta: i32 = -1;//if sq_diff(old_idx - 1, r_xs, r_ys, x) < sq_diff(old_idx + 1, r_xs, r_ys, x)
+                     //{ -1 } else { 1 };
+    let mut last_dist_sq = dist_sq;
+    let mut idx = old_idx;
+    while idx > 0 && idx < r_xs.len() - 1 {
+        idx = (idx as i32 + delta) as usize;
+        let dist_sq = sq_diff(idx, r_xs, r_ys, x);
+        if dist_sq < dist_sq_lim {
+            return idx;
+        }
+        // but don't get worse!
+        if dist_sq > last_dist_sq {
+            // println!("Don't get worse from {} to {}", last_dist_sq, dist_sq);
+            return (idx as i32 - delta) as usize;
+        }
+        last_dist_sq = dist_sq;
+    }
+    return idx;
+    // find closest index in the reference that is farther along than x
+    // let min_sq_diffs = (0..r_xs.len()).map(|i| (r_xs[i] - x[0]).powi(2) + (r_ys[i] - x[1]).powi(2)).collect::<Vec<_>>();
+    // let min_sq_diff = min_sq_diffs.iter().float_min();
+    // let min_sq_diff_i = min_sq_diffs.iter().position(|&v| v == min_sq_diff).unwrap();
+    // if min_sq_diff_i + 1 < r_xs.len() { min_sq_diff_i + 1 } else { min_sq_diff_i }
+}
+
+fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
     // general ideas...
     // solve the trajectory in local sections, and for each section...
     // start with a trajectory following the center line
@@ -1199,15 +1251,13 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) {
     // use line-like ellipses to approximate boundaries and obstacles
     // really think about _scaling_ of your values for the optimization
 
-    let n_track_sections = 100; // how many local sections to divide the total track into
-
     let n = 3;
     let m = 2;
     let dt = 0.01;
     let ref_steps = tp.thetas.len();
     // extra 2x factor for the half-steps needed by rk2/rk4
     let itermediate_steps = 2;
-    let base_step_factor = 8;
+    let base_step_factor = 2;
     let step_factor = base_step_factor * itermediate_steps;
     let total_steps = ref_steps * step_factor;
     let n_steps = total_steps / itermediate_steps;
@@ -1230,14 +1280,23 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) {
     let l = 3.0; // wheelbase
     let rb = 1.5; // rear wheel to center of mass
 
-    let a_fun = |idx: f64, a: &mut [f64]| {
-        let idx = (idx * 2.0).round() as usize;
+    let a_fun = |idx: f64, k: usize, x: &[f64], a: &mut [f64]| {
+        let old_idx = (idx * 2.0) as usize;
+        let mut idx = next_track_idx(old_idx, r_xs, r_ys, x) + old_idx - k * 2;
+        if idx >= r_xs.len() {
+            idx = r_xs.len() - 1;
+        }
+        // println!("Using idx {} instead of {}", idx, old_idx);
         for i in 0..9 { a[i] = 0.0; }
         a[2] = r_us[idx] * (-r_psis[idx].sin() - rb / l * r_deltas[idx].tan() * r_psis[idx].cos()); // dpsi/du
         a[5] = r_us[idx] * (r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin()); // dpsi/ddelta
     };
-    let b_fun = |idx: f64, b: &mut [f64]| {
-        let idx = (idx * 2.0).round() as usize;
+    let b_fun = |idx: f64, k: usize, x: &[f64], b: &mut [f64]| {
+        let old_idx = (idx * 2.0) as usize;
+        let mut idx = next_track_idx(old_idx, r_xs, r_ys, x) + old_idx - k * 2;
+        if idx >= r_xs.len() {
+            idx = r_xs.len() - 1;
+        }
         b[0] = r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin(); // dx/du
         b[2] = r_psis[idx].sin() + rb / l * r_deltas[idx].tan() * r_psis[idx].cos(); // dy/du
         b[1] = -rb / l * r_us[idx] * r_psis[idx].sin() / r_deltas[idx].cos().powi(2); // dx/ddelta
@@ -1256,14 +1315,14 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) {
     let x0 = [287.0, -176.0, 2.0];
 
     let t_span = (0..n_steps).map(|i: usize| i as f64 * dt).collect::<Vec<_>>();
-    let q = vec![1., 1., 0.1];
-    let r = vec![0.01, 2.0];
+    let q = vec![2., 2., 20.0];
+    let r = vec![0.001, 2.0];
 
     let u_lb = vec![-1000.0, -0.5*10.0];
     let u_ub = vec![1000.0, 0.5*10.0];
 
     let start_time = precise_time_s();
-    let (xs, _us) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon, &ref_x, &ref_u, &ode_fun,
+    let (xs, us) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon, &ref_x, &ref_u, &ode_fun,
                             &[], &[], &[], &[],
                             &[], &[], &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
@@ -1282,22 +1341,6 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) {
         }
     }
     println!("Max distance error: {}", max_dist_error);
-
-    if false {
-        let ax = Axes2D::new()
-            .add(Line2D::new("")
-                .data(&t_span[199..599], &dist_errors[199..599])
-                .color("blue")
-                .marker("+")
-                .linestyle("-")
-                .linewidth(1.0))
-            .xlabel("time")
-            .ylabel("error");
-        let mut mpl = Matplotlib::new().unwrap();
-        ax.apply(&mut mpl).unwrap();
-        mpl.show().unwrap();
-        mpl.wait().unwrap();
-    }
 
     if true {
         let mut xs1 = vec![0.0; n_steps];
@@ -1319,6 +1362,14 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) {
                 .color("orange")
                 .linestyle("-")
                 .linewidth(1.0))
+            .add(Line2D::new("")
+                .data(&tp.bl[0..ref_steps], &tp.bl[ref_steps..ref_steps*2])
+                .color("green")
+                .linestyle("-"))
+            .add(Line2D::new("")
+                .data(&tp.br[0..ref_steps], &tp.br[ref_steps..ref_steps*2])
+                .color("green")
+                .linestyle("-"))
             .xlabel("X")
             .ylabel("Y");
         let mut mpl = Matplotlib::new().unwrap();
@@ -1326,6 +1377,13 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) {
         mpl.show().unwrap();
         mpl.wait().unwrap();
     }
+
+    for i in 0..n_steps-1 {
+        controls[i] = us[i][0];
+        controls[i + n_steps] = us[i][1];
+    }
+
+    return n_steps - 1;
 }
 
 pub fn run_problem1() {
@@ -1477,13 +1535,13 @@ pub fn mpc_test() {
     let l = 3.0; // wheelbase
     let rb = 1.5; // rear wheel to center of mass
 
-    let a_fun = |idx: f64, a: &mut [f64]| {
+    let a_fun = |idx: f64, _: usize, _: &[f64], a: &mut [f64]| {
         let idx = (idx * 2.0).round() as usize;
         for i in 0..9 { a[i] = 0.0; }
         a[2] = r_us[idx] * (-r_psis[idx].sin() - rb / l * r_deltas[idx].tan() * r_psis[idx].cos()); // dpsi/du
         a[5] = r_us[idx] * (r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin()); // dpsi/ddelta
     };
-    let b_fun = |idx: f64, b: &mut [f64]| {
+    let b_fun = |idx: f64, _: usize, _: &[f64], b: &mut [f64]| {
         let idx = (idx * 2.0).round() as usize;
         b[0] = r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin(); // dx/du
         b[2] = r_psis[idx].sin() + rb / l * r_deltas[idx].tan() * r_psis[idx].cos(); // dy/du

@@ -1,12 +1,13 @@
 #include "mex.h"
+#include "matrix.h"
 
 // on windows needs some lib's explicitly specified. not sure why it doesn't auto-detect...
-// mex -g rob535_competition_mex.c target/debug/rob535_competition.lib WS2_32.Lib Userenv.lib
+// mex -R2018a -g rob535_competition_mex.c target/debug/rob535_competition.lib WS2_32.Lib Userenv.lib
 
 extern void solve_obstacle_problem(int n_track, const double *bl, const double *br,
                                    const double *cline, const double *thetas,
                                    int n_obs, const double *obs_x, const double *obs_y,
-                                   int n_controls, double *controls);
+                                   int *n_controls, double *controls);
 
 #define MAX_CONTROL_STEPS 1024
 
@@ -18,12 +19,12 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         mexErrMsgTxt("Wrong number of output args, expected 1");
     }
 
-    double *bl = mxGetPr(prhs[0]);
-    double *br = mxGetPr(prhs[1]);
-    double *cline = mxGetPr(prhs[2]);
-    double *theta = mxGetPr(prhs[3]);
-    double *obs_x = mxGetPr(prhs[4]);
-    double *obs_y = mxGetPr(prhs[5]);
+    double *bl = mxGetDoubles(prhs[0]);
+    double *br = mxGetDoubles(prhs[1]);
+    double *cline = mxGetDoubles(prhs[2]);
+    double *theta = mxGetDoubles(prhs[3]);
+    double *obs_x = mxGetDoubles(prhs[4]);
+    double *obs_y = mxGetDoubles(prhs[5]);
     int n_track = mxGetM(prhs[0]);
     int n_obs_len = mxGetM(prhs[4]);
     int n_obs = n_obs_len / 4;
@@ -32,9 +33,11 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     printf("Got %d obstacles (%d total points)\n", n_obs, n_obs_len);
 
     plhs[0] = mxCreateDoubleMatrix(MAX_CONTROL_STEPS, 2, mxREAL);
-    double *controls = mxGetPr(plhs[0]);
+    double *controls = mxGetDoubles(plhs[0]);
 
+    int n_controls = MAX_CONTROL_STEPS;
     solve_obstacle_problem(n_track, bl, br, cline, theta,
                            n_obs, obs_x, obs_y,
-                           MAX_CONTROL_STEPS, controls);
+                           &n_controls, controls);
+    mxSetM(plhs[0], n_controls);
 }
