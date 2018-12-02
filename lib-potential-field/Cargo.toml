@@ -5,6 +5,7 @@ authors = ["Max Krogius <mkrogius@umich.edu>"]
 
 [dependencies]
 libc = "0.2.0"
+nalgebra = "0.16.0"
 
 [lib]
 name = "potential_field"

@@ -1,16 +1,27 @@
 #include "mex.h"
 #include "matrix.h"
 
-extern void multiply(double* a, double* b, double* c, long elements);
+extern void potential_fields(
+        double* bl,
+        double* br,
+        double* cline,
+        double* theta,
+        int len,
+        //double* XObs,
+        //int nObs,
+        double* u,
+        int* u_len);
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
-    double* a;
-    double* b;
-    double* c;
+    double* bl;
+    double* br;
+    double* cline;
+    double* theta;
+    double* obstacles;
 
     mwSize elements;
 
-    if (nrhs != 2) {
+    if (nrhs != 4) {
         mexErrMsgTxt("Wrong number of input args");
     }
 
@@ -18,20 +29,24 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         mexErrMsgTxt("Wrong number of output args");
     }
 
-    a = mxGetPr(prhs[0]);
-    b = mxGetPr(prhs[1]);
-    elements = mxGetM(prhs[0]);
 
-    plhs[0] = mxCreateDoubleMatrix(elements, 1, mxREAL);
-    c = mxGetPr(plhs[0]);
+    bl = mxGetPr(prhs[0]);
+    br = mxGetPr(prhs[1]);
+    cline = mxGetPr(prhs[2]);
+    theta = mxGetPr(prhs[3]);
+    //XObs = mxGetPr(prhs[4]);
 
-    multiply(a, b, c, elements);
+    int len = mxGetN(prhs[0]);
+    //nObs = mxGetM(prhs[4]);
+
+    double* u = malloc(8000*sizeof(double));
+    int u_len = 0;
+    potential_fields(bl, br, cline, theta, len, /*XObs, nObs,*/ u, &u_len);
+
+    mexPrintf("Length: %d\n", u_len);
+    plhs[0] = mxCreateDoubleMatrix(2, u_len/2, mxREAL);
+    double* u_matlab = mxGetPr(plhs[0]);
+    for (int i = 0; i < u_len; i++) {
+        u_matlab[i] = u[i];
+    }
 }
-
-//int main() {
-//    mxArray *c = NULL;
-//    mxArray *plhs[1], *prhs[2];
-//    prhs[0] = mxCreateDoubleMatrix(3, 1, mxREAL);
-//    prhs[1] = mxCreateDoubleMatrix(3, 1, mxREAL);
-//    mexFunction(1, plhs, 2, prhs);
-//}

@@ -5,3 +5,4 @@ matlab/potential_field.mexa64
 *.swp
 lib-potential-field/target
 *~
+*.o

@@ -1,1 +1,1 @@
-mex -ldl potential_field.c libpotential_field.a
+mex -g -ldl potential_field.c ../lib-potential-field/target/debug/libpotential_field.a
