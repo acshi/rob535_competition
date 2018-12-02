@@ -2,7 +2,7 @@ extern crate libc;
 extern crate nalgebra as na;
 use na::{Vector2, Vector6, VectorN, DimName, Dim};
 use libc::{c_double, c_int};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::slice;
 use std::mem;
 use std::io::Write;
@@ -128,8 +128,14 @@ fn plot_traj(traj: &Vec<Vector6<f64>>, bl: &Pts, br: &Pts) {
         br_x.push(br[i][0]);
         br_y.push(br[i][1]);
     }
-    Command::new("python").arg("-c").arg(format!(
-            "import matplotlib.pyplot as plt; plt.plot({:?}, {:?}); plt.plot({:?}, {:?}); plt.plot({:?}, {:?}); plt.show()", bl_x, bl_y, br_x, br_y, xs, ys)).output().unwrap();
+    // Command::new("python").arg("-c").arg(format!(
+    //         "import matplotlib.pyplot as plt; plt.plot({:?}, {:?}); plt.plot({:?}, {:?}); plt.plot({:?}, {:?}); plt.show()", bl_x, bl_y, br_x, br_y, xs, ys).output().unwrap();
+    let mut p = Command::new("python").stdin(Stdio::piped()).spawn().unwrap();
+    {
+        let p_in = p.stdin.as_mut().unwrap();
+        write!(p_in, "import matplotlib.pyplot as plt; plt.plot({:?}, {:?}); plt.plot({:?}, {:?}); plt.plot({:?}, {:?}); plt.show()", bl_x, bl_y, br_x, br_y, xs, ys).unwrap();
+    }
+    p.wait().unwrap();
 }
 
 #[test]
@@ -356,4 +362,3 @@ pub extern "C" fn potential_fields(bl: *mut c_double,
         *u_len = u_rust.len() as i32;
     }
 }
-
