@@ -43,8 +43,7 @@ for i=1:nSteps
     U(i, :) = [delta, f_x];
     X(i,:) = x;
     T = [0 dt];
-    options = odeset('RelTol',1e-8,'AbsTol',1e-10);
-    [~,Y]=ode45(@(t,x)bike(t,x,T,[delta, delta; f_x, f_x]'),T,x, options);
+    [~,Y]=ode45(@(t,x)bike(t,x,T,[delta, delta; f_x, f_x]'),T,x);
     x = Y(end, :);
 end
 end
