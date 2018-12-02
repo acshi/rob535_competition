@@ -1241,42 +1241,70 @@ fn next_track_idx(old_idx: usize, r_xs: &[f64], r_ys: &[f64], x: &[f64]) -> usiz
     // if min_sq_diff_i + 1 < r_xs.len() { min_sq_diff_i + 1 } else { min_sq_diff_i }
 }
 
-fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
-    // general ideas...
-    // solve the trajectory in local sections, and for each section...
-    // start with a trajectory following the center line
-    // (or from a potential field trajectory that avoids the obstacles)
-    // then iteratively run the approximate quadratically constrained quadratic program
-    // really think about initial conditions based on obvious ideas (need to turn? start turning!)
-    // use line-like ellipses to approximate boundaries and obstacles
-    // really think about _scaling_ of your values for the optimization
-
-    let n = 3;
-    let m = 2;
-    let dt = 0.01;
+fn plot_trajectory(tp: &TrackProblem, n_steps: usize, xs: &[Vec<f64>], r_xs: &[f64], r_ys: &[f64]) {
     let ref_steps = tp.thetas.len();
-    // extra 2x factor for the half-steps needed by rk2/rk4
-    let itermediate_steps = 2;
-    let base_step_factor = 2;
-    let step_factor = base_step_factor * itermediate_steps;
-    let total_steps = ref_steps * step_factor;
-    let n_steps = total_steps / itermediate_steps;
-    let horizon = 11 * base_step_factor;
+    let mut xs1 = vec![0.0; n_steps];
+    let mut ys1 = vec![0.0; n_steps];
+    for i in 0..n_steps {
+        xs1[i] = xs[i][0];
+        ys1[i] = xs[i][1];
+    }
 
-    let mut ref_x = vec![0.0; total_steps * n];
-    ref_x[0..total_steps*2].copy_from_slice(&lin_upsample(2, &tp.cline, step_factor));
-    ref_x[total_steps*2..total_steps*3].copy_from_slice(&lin_upsample(1, &tp.thetas, step_factor));
-    let ref_x = ref_x;
+    let ax = Axes2D::new()
+        .add(Line2D::new("")
+            .data(&xs1, &ys1)
+            .color("blue")
+            // .marker("+")
+            .linestyle("-")
+            .linewidth(1.0))
+        .add(Line2D::new("")
+            .data(&r_xs, &r_ys)
+            .color("orange")
+            .linestyle("-")
+            .linewidth(1.0))
+        .add(Line2D::new("")
+            .data(&tp.bl[0..ref_steps], &tp.bl[ref_steps..ref_steps*2])
+            .color("green")
+            .linestyle("-"))
+        .add(Line2D::new("")
+            .data(&tp.br[0..ref_steps], &tp.br[ref_steps..ref_steps*2])
+            .color("green")
+            .linestyle("-"))
+        .xlabel("X")
+        .ylabel("Y");
+    let mut mpl = Matplotlib::new().unwrap();
+    ax.apply(&mut mpl).unwrap();
+    mpl.show().unwrap();
+    mpl.wait().unwrap();
+}
+
+fn report_trajectory_error(n_steps: usize, xs: &[Vec<f64>], r_xs: &[f64], r_ys: &[f64]) {
+    // caclulate max distance error between the actual and nominal trajectories,
+    // when the x value of the actual trajectory is between or equal to 3 and 4 m
+    let mut dist_errors = vec![0.0; n_steps];
+    let mut max_dist_error = 0.0;
+    for i in 0..xs.len() {
+        let dx = xs[i][0] - r_xs[i*2];
+        let dy = xs[i][1] - r_ys[i*2];
+        let dist_err = (dx * dx + dy * dy).sqrt();
+        dist_errors[i] = dist_err;
+        if dist_err > max_dist_error {
+            max_dist_error = dist_err;
+        }
+    }
+    println!("Max distance error: {}", max_dist_error);
+}
+
+fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, ref_x: &[f64], ref_u: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+    let total_steps = ref_x.len() / n;
     let r_xs = &ref_x[0..total_steps];
     let r_ys = &ref_x[total_steps..total_steps*2];
     let r_psis = &ref_x[total_steps*2..total_steps*3];
-    let mut ref_u = vec![0.0f64; total_steps * m];
-    ref_u[0..total_steps].copy_from_slice(&vec![0.1; total_steps]);
-    ref_u[total_steps..total_steps*2].copy_from_slice(&vec![0.0; total_steps]);
-    let ref_u = ref_u;
+
     let r_us = &ref_u[0..total_steps];
     let r_deltas = &ref_u[total_steps..total_steps*2];
 
+    let dt = 0.01;
     let l = 3.0; // wheelbase
     let rb = 1.5; // rear wheel to center of mass
 
@@ -1326,56 +1354,46 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
                             &[], &[], &[], &[],
                             &[], &[], &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
+    report_trajectory_error(n_steps, &xs, r_xs, r_ys);
 
-    // caclulate max distance error between the actual and nominal trajectories,
-    // when the x value of the actual trajectory is between or equal to 3 and 4 m
-    let mut dist_errors = vec![0.0; n_steps];
-    let mut max_dist_error = 0.0;
-    for i in 0..xs.len() {
-        let dx = xs[i][0] - r_xs[i*2];
-        let dy = xs[i][1] - r_ys[i*2];
-        let dist_err = (dx * dx + dy * dy).sqrt();
-        dist_errors[i] = dist_err;
-        if dist_err > max_dist_error {
-            max_dist_error = dist_err;
-        }
-    }
-    println!("Max distance error: {}", max_dist_error);
+    (xs, us)
+}
+
+fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
+    // general ideas...
+    // solve the trajectory in local sections, and for each section...
+    // start with a trajectory following the center line
+    // (or from a potential field trajectory that avoids the obstacles)
+    // then iteratively run the approximate quadratically constrained quadratic program
+    // really think about initial conditions based on obvious ideas (need to turn? start turning!)
+    // use line-like ellipses to approximate boundaries and obstacles
+    // really think about _scaling_ of your values for the optimization
+
+    let n = 3;
+    let m = 2;
+    let ref_steps = tp.thetas.len();
+    // extra 2x factor for the half-steps needed by rk2/rk4
+    let itermediate_steps = 2;
+    let base_step_factor = 2;
+    let step_factor = base_step_factor * itermediate_steps;
+    let total_steps = ref_steps * step_factor;
+    let n_steps = total_steps / itermediate_steps;
+    let horizon = 11 * base_step_factor;
+
+    let mut ref_x = vec![0.0; total_steps * n];
+    ref_x[0..total_steps*2].copy_from_slice(&lin_upsample(2, &tp.cline, step_factor));
+    ref_x[total_steps*2..total_steps*3].copy_from_slice(&lin_upsample(1, &tp.thetas, step_factor));
+    let ref_x = ref_x;
+    let mut ref_u = vec![0.0f64; total_steps * m];
+    ref_u[0..total_steps].copy_from_slice(&vec![0.1; total_steps]);
+    ref_u[total_steps..total_steps*2].copy_from_slice(&vec![0.0; total_steps]);
+    let ref_u = ref_u;
+    let (xs, us) = solve_mpc_iteration(n, horizon, n_steps, &ref_x, &ref_u);
 
     if true {
-        let mut xs1 = vec![0.0; n_steps];
-        let mut ys1 = vec![0.0; n_steps];
-        for i in 0..n_steps {
-            xs1[i] = xs[i][0];
-            ys1[i] = xs[i][1];
-        }
-
-        let ax = Axes2D::new()
-            .add(Line2D::new("")
-                .data(&xs1, &ys1)
-                .color("blue")
-                // .marker("+")
-                .linestyle("-")
-                .linewidth(1.0))
-            .add(Line2D::new("")
-                .data(&r_xs, &r_ys)
-                .color("orange")
-                .linestyle("-")
-                .linewidth(1.0))
-            .add(Line2D::new("")
-                .data(&tp.bl[0..ref_steps], &tp.bl[ref_steps..ref_steps*2])
-                .color("green")
-                .linestyle("-"))
-            .add(Line2D::new("")
-                .data(&tp.br[0..ref_steps], &tp.br[ref_steps..ref_steps*2])
-                .color("green")
-                .linestyle("-"))
-            .xlabel("X")
-            .ylabel("Y");
-        let mut mpl = Matplotlib::new().unwrap();
-        ax.apply(&mut mpl).unwrap();
-        mpl.show().unwrap();
-        mpl.wait().unwrap();
+        let r_xs = &ref_x[0..total_steps];
+        let r_ys = &ref_x[total_steps..total_steps*2];
+        plot_trajectory(&tp, n_steps, &xs, r_xs, r_ys);
     }
 
     for i in 0..n_steps-1 {
