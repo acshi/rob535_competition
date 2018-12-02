@@ -32,10 +32,9 @@ end
 T=0:0.01:(size(U,1)-1)*0.01;
 
 
-%Solve for trajectory      
-
-options = odeset('RelTol',1e-9,'AbsTol',1e-11);
-[~,Y]=ode45(@(t,x)bike(t,x,T,U),T,x0);
+%Solve for trajectory   
+    options = odeset('RelTol',1e-8,'AbsTol',1e-10);
+[~,Y]=ode45(@(t,x)bike(t,x,T,U),T,x0,options);
 end
 
 function dzdt=bike(t,x,T,U)
