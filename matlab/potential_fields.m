@@ -16,7 +16,7 @@ dt = 0.1;
 
 rem = -1;
 
-lookahead = 10;
+lookahead = 8;
 
 i=1;
 while true

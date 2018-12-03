@@ -56,9 +56,9 @@ d_alpha_r_d_v = -u/(u^2 + (v - b*r)^2);
 d_alpha_r_d_u = (v - b*r)/(u^2 + (v - b*r)^2);
 d_alpha_r_d_r = b*u/(u^2 + (v - b*r)^2);
 
-alpha_f = df - atan((v + a*r)/u);
+alpha_f = df - atan2((v + a*r), u);
 d_phi_d_alpha_f = (1 - Ey) + Ey/(1 + (By*(alpha_f*pi/180 + Shy))^2);
-alpha_r = -atan((v - b*r)/u);
+alpha_r = -atan2((v - b*r), u);
 d_phi_d_alpha_r = (1 - Ey) + Ey/(1 + (By*(alpha_r*pi/180 + Shy))^2);
 
 Fzr = a*m*g/(a + b);
