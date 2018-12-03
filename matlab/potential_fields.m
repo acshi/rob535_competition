@@ -14,9 +14,15 @@ f_x_min = -5000.;
 f_x_max = 2500.;
 dt = 0.1;
 
-for i=1:nSteps
+rem = -1;
+
+lookahead = 10;
+
+i=1;
+while true
+    i = i + 1;
     disp(i);
-    force = electric_force([x(1); x(3)], testTrack, XObs);
+    force = electric_force([x(1); x(3)] + lookahead*[cos(x(5)); sin(x(5))], testTrack, XObs);
     force = force/norm(force);
     dir = [cos(x(5)); sin(x(5))];
     cos_d = force'*dir;
@@ -45,6 +51,17 @@ for i=1:nSteps
     T = [0 dt];
     [~,Y]=ode45(@(t,x)bike(t,x,T,[delta, delta; f_x, f_x]'),T,x);
     x = Y(end, :);
+    
+    dist = sum(([x(1); x(3)] - testTrack.cline).^2,1);
+    [~,idx] = min(dist);
+    if rem < 0 && idx == size(dist,2)
+        % simulate a few more steps
+        rem = 10;
+    end
+    rem = rem - 1;
+    if rem == 0
+        break;
+    end
 end
 end
 

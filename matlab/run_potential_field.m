@@ -1,5 +1,5 @@
 load TestTrack.mat;
-XObs = generateRandomObstacles(1, TestTrack);
+XObs = generateRandomObstacles(20, TestTrack);
 [U, X] = potential_fields(TestTrack, XObs);
 
 figure;
@@ -15,5 +15,9 @@ plot(X(:,1), X(:,3), '.');
 plot(Y(:,1), Y(:,3), '.');
 plot(TestTrack.bl(1,:), TestTrack.bl(2,:))
 plot(TestTrack.br(1,:), TestTrack.br(2,:))
-%info = getTrajectoryInfo(Y, U, []);
+for i=1:numel(XObs)
+    ob = [XObs{i}; XObs{i}(1,:)];
+    plot(ob(:,1),ob(:,2));
+end
+info = getTrajectoryInfo(Y, U, []);
 
