@@ -810,6 +810,8 @@ where F: Fn(f64, usize, &[f64], &mut [f64]),
         aeq_coefs[i] = 1.0;
     }
 
+    let mut sum_obj_val = 0.0;
+
     for k in 0..n_steps-1 {
         let horizon_left = n_steps - k;
         let valid_horizon = if horizon_left < horizon { horizon_left } else { horizon };
@@ -890,20 +892,25 @@ where F: Fn(f64, usize, &[f64], &mut [f64]),
         }
         qp.bounds(&lb, &ub);
 
-        // print!("[");
-        // for i in 0..n_dec {
-        //     print!("{}; ", ub[i]);
+        // if ref_u[0].abs() > 0.101 {
+        //     print!("[");
+        //     for i in 0..n_dec {
+        //         print!("{}; ", ub[i]);
+        //     }
+        //     println!("]");
+        //     std::process::exit(0);
         // }
-        // println!("]");
-        // panic!("Done for now");
 
-        if let Some(_) = qp.run(&mut solved_vars) {
-            // println!("{}", obj_val);
+        if let Some(obj_val) = qp.run(&mut solved_vars) {
+            sum_obj_val += obj_val;
             // println!("{:?}", solved_vars);
 
             // we actually don't care much where the quadprog thinks we end up
             // xs[k + 1].copy_from_slice(&solved_vars[n..2*n]);
             us[k].copy_from_slice(&solved_vars[n*horizon..n*horizon+m]);
+            // if ref_u[0].abs() > 0.101 {
+            //     println!("{:?}", us[k]);
+            // }
             for i in 0..m {
                 us[k][i] += ref_u[(n_steps * i + k) * 2];
             }
@@ -920,6 +927,8 @@ where F: Fn(f64, usize, &[f64], &mut [f64]),
             panic!("Quadratic program could not be solved on timestep {}", k);
         }
     }
+
+    println!("Mean obj val: {:.2}", sum_obj_val / (n_steps-1) as f64);
 
     (xs, us)
 }
@@ -1283,19 +1292,33 @@ fn report_trajectory_error(n_steps: usize, xs: &[Vec<f64>], r_xs: &[f64], r_ys: 
     // when the x value of the actual trajectory is between or equal to 3 and 4 m
     let mut dist_errors = vec![0.0; n_steps];
     let mut max_dist_error = 0.0;
+    let mut max_dist_i = 0;
+    let mut max_dist_idx = 0;
+    let mut mean_square_error = 0.0;
     for i in 0..xs.len() {
-        let dx = xs[i][0] - r_xs[i*2];
-        let dy = xs[i][1] - r_ys[i*2];
-        let dist_err = (dx * dx + dy * dy).sqrt();
+        if i == 692 {
+            let i = 692;
+        }
+        let idx = next_track_idx(i, r_xs, r_ys, &xs[i]);
+        let dx = xs[i][0] - r_xs[idx*2];
+        let dy = xs[i][1] - r_ys[idx*2];
+        let sq_err = dx * dx + dy * dy;
+        mean_square_error += sq_err;
+        let dist_err = sq_err.sqrt();
         dist_errors[i] = dist_err;
         if dist_err > max_dist_error {
             max_dist_error = dist_err;
+            max_dist_i = i;
+            max_dist_idx = idx;
         }
     }
+    mean_square_error /= xs.len() as f64;
     println!("Max distance error: {}", max_dist_error);
+    println!(" at {}: ({}, {}) with ref ({}, {})", max_dist_i, xs[max_dist_i][0], xs[max_dist_i][1], r_xs[max_dist_idx*2], r_ys[max_dist_idx*2]);
+    println!("Mean square error: {}\n", mean_square_error);
 }
 
-fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, ref_x: &[f64], ref_u: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, improving: bool, q: &[f64], r: &[f64], ref_x: &[f64], ref_u: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     let total_steps = ref_x.len() / n;
     let r_xs = &ref_x[0..total_steps];
     let r_ys = &ref_x[total_steps..total_steps*2];
@@ -1310,10 +1333,15 @@ fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, ref_x: &[f64], 
 
     let a_fun = |idx: f64, k: usize, x: &[f64], a: &mut [f64]| {
         let old_idx = (idx * 2.0) as usize;
-        let mut idx = next_track_idx(old_idx, r_xs, r_ys, x) + old_idx - k * 2;
-        if idx >= r_xs.len() {
-            idx = r_xs.len() - 1;
-        }
+        let idx = if improving {
+            old_idx
+        } else {
+            let mut new_idx = next_track_idx(old_idx, r_xs, r_ys, x) + old_idx - k * 2 + 1;
+            if new_idx >= r_xs.len() {
+                new_idx = r_xs.len() - 1;
+            }
+            new_idx
+        };
         // println!("Using idx {} instead of {}", idx, old_idx);
         for i in 0..9 { a[i] = 0.0; }
         a[2] = r_us[idx] * (-r_psis[idx].sin() - rb / l * r_deltas[idx].tan() * r_psis[idx].cos()); // dpsi/du
@@ -1321,10 +1349,15 @@ fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, ref_x: &[f64], 
     };
     let b_fun = |idx: f64, k: usize, x: &[f64], b: &mut [f64]| {
         let old_idx = (idx * 2.0) as usize;
-        let mut idx = next_track_idx(old_idx, r_xs, r_ys, x) + old_idx - k * 2;
-        if idx >= r_xs.len() {
-            idx = r_xs.len() - 1;
-        }
+        let idx = if improving {
+            old_idx
+        } else {
+            let mut new_idx = next_track_idx(old_idx, r_xs, r_ys, x) + old_idx - k * 2;
+            if new_idx >= r_xs.len() {
+                new_idx = r_xs.len() - 1;
+            }
+            new_idx
+        };
         b[0] = r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin(); // dx/du
         b[2] = r_psis[idx].sin() + rb / l * r_deltas[idx].tan() * r_psis[idx].cos(); // dy/du
         b[1] = -rb / l * r_us[idx] * r_psis[idx].sin() / r_deltas[idx].cos().powi(2); // dx/ddelta
@@ -1343,8 +1376,6 @@ fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, ref_x: &[f64], 
     let x0 = [287.0, -176.0, 2.0];
 
     let t_span = (0..n_steps).map(|i: usize| i as f64 * dt).collect::<Vec<_>>();
-    let q = vec![2., 2., 20.0];
-    let r = vec![0.001, 2.0];
 
     let u_lb = vec![-1000.0, -0.5*10.0];
     let u_ub = vec![1000.0, 0.5*10.0];
@@ -1357,6 +1388,38 @@ fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, ref_x: &[f64], 
     report_trajectory_error(n_steps, &xs, r_xs, r_ys);
 
     (xs, us)
+}
+
+fn resample_center_line(cline: &[f64], thetas: &[f64], n_divisions: usize) -> (Vec<f64>, Vec<f64>) {
+    // first determine spacing between points on the center line
+    // and sum the values
+    let n_points = cline.len() / 2;
+    let cxs = &cline[0..n_points];
+    let cys = &cline[n_points..n_points*2];
+    let mut sum_distances = vec![0.0; n_points];
+    for i in 1..n_points {
+        let d = ((cxs[i] - cxs[i-1]).powi(2) + (cys[i] - cys[i-1]).powi(2)).sqrt();
+        sum_distances[i] = sum_distances[i - 1] + d;
+    }
+    let total_dist = sum_distances.last().unwrap();
+    let mut new_clines = vec![0.0; 2 * n_divisions];
+    let mut new_thetas = vec![0.0; n_divisions];
+    for i in 0..n_divisions {
+        let target_d = total_dist / ((n_divisions - 1) as f64) * i as f64;
+        let idx2 = sum_distances.iter().position(|&d| d >= target_d).unwrap();
+        if idx2 == 0 {
+            new_clines[0] = cxs[0];
+            new_clines[n_divisions] = cys[0];
+            continue;
+        }
+        let idx1 = idx2 - 1;
+        let diff = sum_distances[idx2] - sum_distances[idx1];
+        let alpha = (sum_distances[idx2] - target_d) / diff;
+        new_clines[i] = cxs[idx1] * alpha + (1.0 - alpha) * cxs[idx2];
+        new_clines[i+n_divisions] = cys[idx1] * alpha + (1.0 - alpha) * cys[idx2];
+        new_thetas[i] = thetas[idx1] * alpha + (1.0 - alpha) * thetas[idx2];
+    }
+    (new_clines, new_thetas)
 }
 
 fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
@@ -1374,21 +1437,43 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
     let ref_steps = tp.thetas.len();
     // extra 2x factor for the half-steps needed by rk2/rk4
     let itermediate_steps = 2;
-    let base_step_factor = 2;
+    let base_step_factor = 4;
     let step_factor = base_step_factor * itermediate_steps;
     let total_steps = ref_steps * step_factor;
     let n_steps = total_steps / itermediate_steps;
     let horizon = 11 * base_step_factor;
 
+    let q = vec![2., 2., 20.0];
+    let r = vec![0.002, 2.0];
+
+    let (cline, thetas) = resample_center_line(&tp.cline, &tp.thetas, total_steps);
+
     let mut ref_x = vec![0.0; total_steps * n];
-    ref_x[0..total_steps*2].copy_from_slice(&lin_upsample(2, &tp.cline, step_factor));
-    ref_x[total_steps*2..total_steps*3].copy_from_slice(&lin_upsample(1, &tp.thetas, step_factor));
+    ref_x[0..total_steps*2].copy_from_slice(&cline);
+    ref_x[total_steps*2..total_steps*3].copy_from_slice(&thetas);
     let ref_x = ref_x;
     let mut ref_u = vec![0.0f64; total_steps * m];
     ref_u[0..total_steps].copy_from_slice(&vec![0.1; total_steps]);
     ref_u[total_steps..total_steps*2].copy_from_slice(&vec![0.0; total_steps]);
     let ref_u = ref_u;
-    let (xs, us) = solve_mpc_iteration(n, horizon, n_steps, &ref_x, &ref_u);
+    let (mut xs, mut us) = solve_mpc_iteration(n, horizon, n_steps, false, &q, &r, &ref_x, &ref_u);
+
+    for _i in 0..0 {
+        let mut new_ref_u = vec![0.0; total_steps * m];
+        for i in 0..n_steps-1 {
+            new_ref_u[i * 2] = us[i][0];
+            new_ref_u[i * 2 + 1] = us[i][0];
+            new_ref_u[i * 2 + total_steps] = us[i][1];
+            new_ref_u[i * 2 + total_steps + 1] = us[i][1];
+        }
+        let new_ref_u = new_ref_u;
+
+        let q = vec![2., 2., 20.0];
+        let r = vec![0.001e8, 2.0e8];
+        let (new_xs, new_us) = solve_mpc_iteration(n, horizon, n_steps, false, &q, &r, &ref_x, &new_ref_u);
+        xs = new_xs;
+        us = new_us;
+    }
 
     if true {
         let r_xs = &ref_x[0..total_steps];
@@ -1398,7 +1483,7 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
 
     for i in 0..n_steps-1 {
         controls[i] = us[i][0];
-        controls[i + n_steps] = us[i][1];
+        controls[i + n_steps - 1] = us[i][1];
     }
 
     return n_steps - 1;
