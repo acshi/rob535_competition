@@ -9,7 +9,7 @@ extern void solve_obstacle_problem(int n_track, const double *bl, const double *
                                    int n_obs, const double *obs_x, const double *obs_y,
                                    int *n_controls, double *controls);
 
-#define MAX_CONTROL_STEPS 1024
+#define MAX_CONTROL_STEPS 2048
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     if (nrhs != 6) {

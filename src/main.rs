@@ -24,5 +24,10 @@ fn main() {
     if false {
         bike_test();
     }
-    run_problem1();
+    if false {
+        bike_derivative_test();
+    }
+    if true {
+        run_problem1();
+    }
 }

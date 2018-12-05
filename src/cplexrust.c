@@ -189,6 +189,17 @@ int qp_create(int n, double *f, double *lb, double *ub, int n_le, int n_eq, CPXE
     return 0;
 }
 
+int qp_linear_cost(CPXENVptr env, CPXLPptr qp, int n, double *f) {
+    int *idxs = malloc(sizeof(int) * n);
+    for (int i = 0; i < n; i++) {
+        idxs[i] = i;
+    }
+    CPXchgobj(env, qp, n, idxs, f);
+    free(idxs);
+
+    return 0;
+}
+
 int qp_bounds(CPXENVptr env, CPXLPptr qp, double *lb, double *ub) {
     int n = CPXgetnumcols(env, qp);
     char *bound_kind = malloc(sizeof(char) * n);

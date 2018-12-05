@@ -33,6 +33,8 @@ extern {
                   n_le: i32, n_eq: i32,
                   env_out: *mut *mut c_void, qp_out: *mut *mut c_void) -> i32;
 
+    fn qp_linear_cost(env: *mut c_void, qp: *mut c_void, n: i32, f: *const f64) -> i32;
+
     fn qp_bounds(env: *mut c_void, qp: *mut c_void, lb: *const f64, ub: *const f64) -> i32;
 
     fn qp_diagonal_quadratic_cost(env: *mut c_void, qp: *mut c_void, q_diag: *const f64) -> i32;
@@ -83,6 +85,16 @@ impl QuadProg {
             }
         }
         QuadProg { env, qp, n, n_le, n_eq, n_quad_geqs: 0 }
+    }
+
+    fn linear_cost(&mut self, f: &[f64]) {
+        assert_eq!(f.len(), self.n as usize);
+        unsafe {
+            let status = qp_linear_cost(self.env, self.qp, self.n, f.as_ptr());
+            if status != 0 {
+                panic!();
+            }
+        }
     }
 
     fn bounds(&mut self, lb: &[f64], ub: &[f64]) {
@@ -642,12 +654,11 @@ where F: Fn(f64, &mut [f64]),
 }
 
 #[allow(dead_code)]
-fn euler_constraints<F, G>(n: usize, m: usize, idx: usize, horizon: usize, dt: f64,
-                           a_fun: &F, b_fun: &G,
+fn euler_constraints<F>(n: usize, m: usize, idx: usize, horizon: usize, dt: f64,
+                           ab_fun: &F,
                            aeq_row_idxs: &mut [i32], aeq_col_idxs: &mut [i32],
                            aeq_coefs: &mut [f64])
-where F: Fn(f64, &mut [f64]),
-      G: Fn(f64, &mut [f64]) {
+where F: Fn(f64, &mut [f64], &mut [f64]) {
     let mut a_mat = vec![0.0; n * n];
     let mut b_mat = vec![0.0; n * m];
     // euler integration equality constraints
@@ -666,7 +677,7 @@ where F: Fn(f64, &mut [f64]),
         }
 
         // dt * A_i * X_i
-        a_fun((i + idx) as f64, &mut a_mat);
+        ab_fun((i + idx) as f64, &mut a_mat, &mut b_mat);
         for k in 0..n*n {
             a_mat[k] *= dt;
         }
@@ -684,7 +695,6 @@ where F: Fn(f64, &mut [f64]),
         }
 
         // dt * B_i * U_i
-        b_fun((i + idx) as f64, &mut b_mat);
         for k in 0..n*m {
             b_mat[k] *= dt;
         }
@@ -701,15 +711,14 @@ where F: Fn(f64, &mut [f64]),
 
 // currently expects ref_x and ref_u to be twice as long as needed for the number of time steps
 // because that is how they would already need to be for a_fun and b_fun in the rk2/rk4 scenario
-fn mpc_ltv<F, G, H>(a_fun: &F, b_fun: &G, q_diag: &[f64], r_diag: &[f64],
-                    t_span: &[f64], horizon: usize,
-                    ref_x: &[f64], ref_u: &[f64], ode_fun: &H,
-                    a_x_constraints: &[f64], b_x_constraints: &[f64],
-                    a_u_constraints: &[f64], b_u_constraints: &[f64],
-                    x_lb: &[f64], x_ub: &[f64],
-                    u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
-where F: Fn(f64, usize, &[f64], &mut [f64]),
-      G: Fn(f64, usize, &[f64], &mut [f64]),
+fn mpc_ltv<F, H>(ab_fun: &F, q_diag: &[f64], r_diag: &[f64],
+                 t_span: &[f64], horizon: usize,
+                 obj_x: &[f64], ref_x: &[f64], ref_u: &[f64], ode_fun: &H,
+                 a_x_constraints: &[f64], b_x_constraints: &[f64],
+                 a_u_constraints: &[f64], b_u_constraints: &[f64],
+                 x_lb: &[f64], x_ub: &[f64],
+                 u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
+where F: Fn(f64, usize, &[f64], &mut [f64], &mut [f64]),
       H: Fn(f64, &[f64], &[f64], &mut[f64]) {
     let n = x0.len();
     assert_eq!(q_diag.len(), n);
@@ -784,7 +793,7 @@ where F: Fn(f64, usize, &[f64], &mut [f64]),
     xs[0].copy_from_slice(x0);
     let mut x_new = vec![0.0; n];
 
-    let linear_cost = vec![0.0; n_dec];
+    let mut linear_cost = vec![0.0; n_dec];
     let mut qp = QuadProg::new(n_dec, &linear_cost, &lb, &ub, n_ineq, n_eq);
     qp.diagonal_quadratic_cost(&quadratic_cost_diag);
 
@@ -821,6 +830,17 @@ where F: Fn(f64, usize, &[f64], &mut [f64]),
         for i in 0..n {
             b_eq[i] -= ref_x[(n_steps * i + k) * 2];
         }
+
+        // linear cost allows the objective values function to be different from the reference
+        // trajectory values
+        for i in 0..valid_horizon {
+            for j in 0..n {
+                let ref_idx = (n_steps * j + k + i) * 2;
+                linear_cost[i*n+j] = 2.0 * (obj_x[ref_idx] - ref_x[ref_idx]);
+            }
+        }
+        qp.linear_cost(&linear_cost);
+
         // zero invalid horizon coefficients
         // perhaps not helpful!! -- without this the last constraint will become duplicated
         // as if we want the 'vehicle' to stop at the end state... which may be a good thing!
@@ -832,9 +852,8 @@ where F: Fn(f64, usize, &[f64], &mut [f64]),
         //     }
         // }
         {
-            let a_fun = &|idx: f64, a: &mut [f64]| a_fun(idx, k, &xs[k], a);
-            let b_fun = &|idx: f64, b: &mut [f64]| b_fun(idx, k, &xs[k], b);
-            euler_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
+            let ab_fun = &|idx: f64, a: &mut [f64], b: &mut [f64]| ab_fun(idx, k, &xs[k], a, b);
+            euler_constraints(n, m, k, valid_horizon, dt, ab_fun,
                               &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
             // rk4_constraints(n, m, k, valid_horizon, dt, a_fun, b_fun,
             //                 &mut aeq_row_idxs, &mut aeq_col_idxs, &mut aeq_coefs);
@@ -913,6 +932,39 @@ where F: Fn(f64, usize, &[f64], &mut [f64]),
             // }
             for i in 0..m {
                 us[k][i] += ref_u[(n_steps * i + k) * 2];
+            }
+
+            if false && k == 50 && ref_x[0] != obj_x[0] {
+                let total_steps = n_steps * 2;
+                let r_xs = &ref_x[0..total_steps];
+                let r_ys = &ref_x[total_steps*2..total_steps*3];
+
+                let mut horizon_xs = vec![0.0; horizon];
+                let mut horizon_ys = vec![0.0; horizon];
+
+                for i in 0..horizon {
+                    horizon_xs[i] = solved_vars[n*i] + r_xs[(k + i) * 2];
+                    horizon_ys[i] = solved_vars[n*i+2] + r_ys[(k + i) * 2];
+                }
+
+                let ax = Axes2D::new()
+                    .add(Line2D::new("")
+                        .data(&horizon_xs, &horizon_ys)
+                        .color("blue")
+                        .linestyle("-")
+                        .linewidth(1.0))
+                    .add(Line2D::new("")
+                        // .data(r_xs, r_ys)
+                        .data(&obj_x[0..total_steps], &obj_x[total_steps*2..total_steps*3])
+                        .color("orange")
+                        .linestyle("-")
+                        .linewidth(1.0))
+                    .xlabel("X")
+                    .ylabel("Y");
+                let mut mpl = Matplotlib::new().unwrap();
+                ax.apply(&mut mpl).unwrap();
+                mpl.show().unwrap();
+                mpl.wait().unwrap();
             }
 
             // print!("{:.10} ", us[k][0]);
@@ -1198,6 +1250,137 @@ pub extern fn solve_obstacle_problem(n_track: i32, bl: *const f64, br: *const f6
     }
 }
 
+fn bike_derivatives(state: &[f64], controls: &[f64], a_mat: &mut [f64], b_mat: &mut [f64]) {
+    let a_rows = 6;
+    let b_rows = 2;
+    // Constants
+    let m = 1400.0;
+    let nw = 2.0;
+    let iz = 2667.0;
+    let a = 1.35;
+    let b = 1.45;
+    let by = 0.27;
+    let cy = 1.2;
+    let dy = 0.7;
+    let ey = -1.6;
+    let shy = 0.0;
+    let svy = 0.0;
+    let g = 9.806;
+
+    let x_ind = 0;
+    let u_ind = 1;
+    let y_ind = 2;
+    let v_ind = 3;
+    let psi_ind = 4;
+    let r_ind = 5;
+
+    let u = state[u_ind];
+    let v = state[v_ind];
+    let psi = state[psi_ind];
+    let r = state[r_ind];
+
+    let df_ind = 0;
+    let fx_ind = 1;
+
+    let df = controls[df_ind];
+    let fx = controls[fx_ind];
+
+    for i in 0..a_rows*a_rows {
+        a_mat[i] = 0.0;
+    }
+    for i in 0..b_rows*a_rows {
+        b_mat[i] = 0.0;
+    }
+
+    a_mat[x_ind * a_rows + u_ind] = psi.cos();
+    a_mat[x_ind * a_rows + v_ind] = -psi.sin();
+    a_mat[x_ind * a_rows + psi_ind] = -u*psi.sin() - v*psi.cos();
+
+    a_mat[y_ind * a_rows + u_ind] = psi.sin();
+    a_mat[y_ind * a_rows + v_ind] = psi.cos();
+    a_mat[y_ind * a_rows + psi_ind] = u*psi.cos() - v*psi.sin();
+
+    a_mat[psi_ind * a_rows + r_ind] = 1.0;
+
+    let d_rad2deg = 180.0/f64::consts::PI;
+
+    let d_alpha_f_d_df = d_rad2deg;
+    let d_alpha_f_d_v = d_rad2deg * -u/(u*u + (v + a*r).powi(2));
+    let d_alpha_f_d_u = d_rad2deg * (v + a*r)/(u*u + (v + a*r).powi(2));
+    let d_alpha_f_d_r = d_rad2deg * -a*u/(u*u +(v + a*r).powi(2));
+
+    let d_alpha_r_d_v = d_rad2deg * -u/(u*u + (v - b*r).powi(2));
+    let d_alpha_r_d_u = d_rad2deg * (v - b*r)/(u*u + (v - b*r).powi(2));
+    let d_alpha_r_d_r = d_rad2deg * b*u/(u*u + (v - b*r).powi(2));
+
+    let alpha_f = d_rad2deg * (df - (v + a*r).atan2(u));
+    let d_phi_d_alpha_f = (1.0 - ey) + ey/(1.0 + (by*(alpha_f + shy)).powi(2));
+    let alpha_r = d_rad2deg * (-(v - b*r).atan2(u));
+    let d_phi_d_alpha_r = (1.0 - ey) + ey/(1.0 + (by*(alpha_r + shy)).powi(2));
+
+    let fzr = a*m*g/(a + b);
+    let fzf = b*m*g/(a + b);
+    let phi_r = (1.0 - ey)*(alpha_r + shy) + (ey/by)*(by*(alpha_r + shy)).atan();
+    let d_fyr_d_phi = fzr*dy*(cy*(by*phi_r).atan()).cos()*cy*by/(1.0 + (by*phi_r).powi(2));
+    let phi_f = (1.0 - ey)*(alpha_f + shy) + (ey/by)*(by*(alpha_f + shy)).atan();
+    let d_fyf_d_phi = fzf*dy*(cy*(by*phi_f).atan()).cos()*cy*by/(1.0 + (by*phi_f).powi(2));
+
+    let fyr = fzr*dy*(cy*(by*phi_r).atan()).sin() + svy;
+    let fyf = fzf*dy*(cy*(by*phi_f).atan()).sin() + svy;
+
+    let fmax = 0.7*m*g;
+    let ftotal = ((nw*fx).powi(2) + fyr*fyr).sqrt();
+
+    let (n, d_n_d_fx, d_n_d_fyr);
+    if ftotal > fmax {
+        n = fmax/ftotal;
+        let real_part = -fmax*nw*nw*fx;
+        let possibly_nan = ((nw*fx).powi(2) + fyr*fyr).powf(-1.5);
+        d_n_d_fx = if real_part == 0.0 { 0.0 } else { real_part * possibly_nan };
+        let real_part = -fmax*fyr;
+        d_n_d_fyr = if real_part == 0.0 { 0.0 } else { real_part * possibly_nan };
+    } else {
+        n = 1.0;
+        d_n_d_fx = 0.0;
+        d_n_d_fyr = 0.0;
+    }
+
+    let d_fsyr_d_fx = d_n_d_fx*fyr;
+    let d_fsx_d_fx = d_n_d_fx*fx + n;
+    let d_fsyr_d_fyr = d_n_d_fyr*fyr + n;
+    let d_fsx_d_fyr = d_n_d_fyr*fx;
+
+    let d_fyr_d_r = d_fyr_d_phi*d_phi_d_alpha_r*d_alpha_r_d_r;
+    let d_fyr_d_u = d_fyr_d_phi*d_phi_d_alpha_r*d_alpha_r_d_u;
+    let d_fyr_d_v = d_fyr_d_phi*d_phi_d_alpha_r*d_alpha_r_d_v;
+    let d_fsyr_d_r = d_fsyr_d_fyr*d_fyr_d_r;
+    let d_fsyr_d_u = d_fsyr_d_fyr*d_fyr_d_u;
+    let d_fsyr_d_v = d_fsyr_d_fyr*d_fyr_d_v;
+
+    let d_fyf_d_r = d_fyf_d_phi*d_phi_d_alpha_f*d_alpha_f_d_r;
+    let d_fyf_d_u = d_fyf_d_phi*d_phi_d_alpha_f*d_alpha_f_d_u;
+    let d_fyf_d_v = d_fyf_d_phi*d_phi_d_alpha_f*d_alpha_f_d_v;
+    let d_fyf_d_df = d_fyf_d_phi*d_phi_d_alpha_f*d_alpha_f_d_df;
+
+    a_mat[r_ind * a_rows + r_ind] = (1.0/iz)*(a*df.cos()*d_fyf_d_r - b*d_fsyr_d_r);
+    a_mat[r_ind * a_rows + u_ind] = (1.0/iz)*(a*df.cos()*d_fyf_d_u - b*d_fsyr_d_u);
+    a_mat[r_ind * a_rows + v_ind] = (1.0/iz)*(a*df.cos()*d_fyf_d_v - b*d_fsyr_d_v);
+    b_mat[r_ind * b_rows + fx_ind] = (-b/iz)*d_fsyr_d_fx;
+    b_mat[r_ind * b_rows + df_ind] = (1.0/iz)*(a*df.cos()*d_fyf_d_df - a*fyf*df.sin());
+
+    a_mat[u_ind * a_rows + u_ind] = (1.0/m)*(nw*d_fsx_d_fyr*d_fyr_d_u - d_fyf_d_u*df.sin());
+    a_mat[u_ind * a_rows + v_ind] = (1.0/m)*(nw*d_fsx_d_fyr*d_fyr_d_v - d_fyf_d_v*df.sin()) + r;
+    a_mat[u_ind * a_rows + r_ind] = (1.0/m)*(nw*d_fsx_d_fyr*d_fyr_d_r - d_fyr_d_r*df.sin()) + v;
+    b_mat[u_ind * b_rows + fx_ind] = (1.0/m)*(nw*d_fsx_d_fx);
+    b_mat[u_ind * b_rows + df_ind] = (1.0/m)*(-df.sin()*d_fyf_d_df - a*fyf*df.cos());
+
+    a_mat[v_ind * a_rows + u_ind] = (1.0/m)*(df.cos()*d_fyf_d_u + d_fsyr_d_u) - r;
+    a_mat[v_ind * a_rows + v_ind] = (1.0/m)*(df.cos()*d_fyf_d_v + d_fsyr_d_v);
+    a_mat[v_ind * a_rows + r_ind] = (1.0/m)*(df.cos()*d_fyf_d_r + d_fsyr_d_r) - u;
+    b_mat[v_ind * b_rows + fx_ind] = (1.0/m)*d_fsyr_d_fx;
+    b_mat[v_ind * b_rows + df_ind] = (1.0/m)*(df.cos()*d_fyf_d_df - df.sin()*fyf);
+}
+
 trait FloatIterExt {
     fn float_max(&mut self) -> f64;
     fn float_min(&mut self) -> f64;
@@ -1212,26 +1395,33 @@ impl<'a, T> FloatIterExt for T where T: Iterator<Item=&'a f64> {
     }
 }
 
-fn sq_diff(idx: usize, r_xs: &[f64], r_ys: &[f64], x: &[f64]) -> f64 {
-    (r_xs[idx] - x[0]).powi(2) + (r_ys[idx] - x[1]).powi(2)
+fn sq_diff(idx: usize, r_xs: &[f64], r_ys: &[f64], x: f64, y: f64) -> f64 {
+    (r_xs[idx] - x).powi(2) + (r_ys[idx] - y).powi(2)
 }
 
-fn next_track_idx(old_idx: usize, r_xs: &[f64], r_ys: &[f64], x: &[f64]) -> usize {
+fn next_track_idx(old_idx: usize, r_xs: &[f64], r_ys: &[f64], x: f64, y: f64) -> usize {
     // if we are far behind (or ahead of) the trajectory (old_idx), then we should use something closer to
     // us as the reference.
     let dist_sq_lim = 1.0;
-    let dist_sq = sq_diff(old_idx, r_xs, r_ys, x);
+    let dist_sq = sq_diff(old_idx, r_xs, r_ys, x, y);
     if dist_sq < dist_sq_lim {
         return old_idx;
     }
     // are we behind or ahead?
-    let delta: i32 = -1;//if sq_diff(old_idx - 1, r_xs, r_ys, x) < sq_diff(old_idx + 1, r_xs, r_ys, x)
-                     //{ -1 } else { 1 };
+    let delta: i32;
+    if old_idx == 0 {
+        delta = 1;
+    } else if old_idx == r_xs.len() - 1 {
+        delta = -1;
+    } else {
+        delta = if sq_diff(old_idx - 1, r_xs, r_ys, x, y) < sq_diff(old_idx + 1, r_xs, r_ys, x, y)
+                { -1 } else { 1 };
+    }
     let mut last_dist_sq = dist_sq;
     let mut idx = old_idx;
     while idx > 0 && idx < r_xs.len() - 1 {
         idx = (idx as i32 + delta) as usize;
-        let dist_sq = sq_diff(idx, r_xs, r_ys, x);
+        let dist_sq = sq_diff(idx, r_xs, r_ys, x, y);
         if dist_sq < dist_sq_lim {
             return idx;
         }
@@ -1243,11 +1433,6 @@ fn next_track_idx(old_idx: usize, r_xs: &[f64], r_ys: &[f64], x: &[f64]) -> usiz
         last_dist_sq = dist_sq;
     }
     return idx;
-    // find closest index in the reference that is farther along than x
-    // let min_sq_diffs = (0..r_xs.len()).map(|i| (r_xs[i] - x[0]).powi(2) + (r_ys[i] - x[1]).powi(2)).collect::<Vec<_>>();
-    // let min_sq_diff = min_sq_diffs.iter().float_min();
-    // let min_sq_diff_i = min_sq_diffs.iter().position(|&v| v == min_sq_diff).unwrap();
-    // if min_sq_diff_i + 1 < r_xs.len() { min_sq_diff_i + 1 } else { min_sq_diff_i }
 }
 
 fn plot_trajectory(tp: &TrackProblem, n_steps: usize, xs: &[Vec<f64>], r_xs: &[f64], r_ys: &[f64]) {
@@ -1256,7 +1441,7 @@ fn plot_trajectory(tp: &TrackProblem, n_steps: usize, xs: &[Vec<f64>], r_xs: &[f
     let mut ys1 = vec![0.0; n_steps];
     for i in 0..n_steps {
         xs1[i] = xs[i][0];
-        ys1[i] = xs[i][1];
+        ys1[i] = xs[i][2];
     }
 
     let ax = Axes2D::new()
@@ -1296,12 +1481,12 @@ fn report_trajectory_error(n_steps: usize, xs: &[Vec<f64>], r_xs: &[f64], r_ys: 
     let mut max_dist_idx = 0;
     let mut mean_square_error = 0.0;
     for i in 0..xs.len() {
-        if i == 692 {
-            let i = 692;
+        if i == 737 {
+            let _i = 692;
         }
-        let idx = next_track_idx(i, r_xs, r_ys, &xs[i]);
-        let dx = xs[i][0] - r_xs[idx*2];
-        let dy = xs[i][1] - r_ys[idx*2];
+        let idx = next_track_idx(i*2, r_xs, r_ys, xs[i][0], xs[i][2]);
+        let dx = xs[i][0] - r_xs[idx];
+        let dy = xs[i][2] - r_ys[idx];
         let sq_err = dx * dx + dy * dy;
         mean_square_error += sq_err;
         let dist_err = sq_err.sqrt();
@@ -1314,78 +1499,55 @@ fn report_trajectory_error(n_steps: usize, xs: &[Vec<f64>], r_xs: &[f64], r_ys: 
     }
     mean_square_error /= xs.len() as f64;
     println!("Max distance error: {}", max_dist_error);
-    println!(" at {}: ({}, {}) with ref ({}, {})", max_dist_i, xs[max_dist_i][0], xs[max_dist_i][1], r_xs[max_dist_idx*2], r_ys[max_dist_idx*2]);
+    println!(" at {}: ({}, {}) with ref ({}, {})", max_dist_i, xs[max_dist_i][0], xs[max_dist_i][2], r_xs[max_dist_idx], r_ys[max_dist_idx]);
     println!("Mean square error: {}\n", mean_square_error);
 }
 
-fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, improving: bool, q: &[f64], r: &[f64], ref_x: &[f64], ref_u: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, improving: bool, q: &[f64], r: &[f64], obj_x: &[f64], ref_x: &[f64], ref_u: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     let total_steps = ref_x.len() / n;
     let r_xs = &ref_x[0..total_steps];
-    let r_ys = &ref_x[total_steps..total_steps*2];
-    let r_psis = &ref_x[total_steps*2..total_steps*3];
+    let r_us = &ref_x[total_steps..total_steps*2];
+    let r_ys = &ref_x[total_steps*2..total_steps*3];
+    let r_vs = &ref_x[total_steps*3..total_steps*4];
+    let r_psis = &ref_x[total_steps*4..total_steps*5];
+    let r_rs = &ref_x[total_steps*5..total_steps*6];
 
-    let r_us = &ref_u[0..total_steps];
-    let r_deltas = &ref_u[total_steps..total_steps*2];
+    let r_deltas = &ref_u[0..total_steps];
+    let r_fxs = &ref_u[total_steps..total_steps*2];
 
-    let dt = 0.01;
-    let l = 3.0; // wheelbase
-    let rb = 1.5; // rear wheel to center of mass
-
-    let a_fun = |idx: f64, k: usize, x: &[f64], a: &mut [f64]| {
+    let ab_fun = |idx: f64, k: usize, x: &[f64], a: &mut [f64], b: &mut [f64]| {
         let old_idx = (idx * 2.0) as usize;
         let idx = if improving {
             old_idx
         } else {
-            let mut new_idx = next_track_idx(old_idx, r_xs, r_ys, x) + old_idx - k * 2 + 1;
+            let mut new_idx = next_track_idx(old_idx, r_xs, r_ys, x[0], x[2]) + old_idx - k * 2;
             if new_idx >= r_xs.len() {
                 new_idx = r_xs.len() - 1;
             }
             new_idx
         };
-        // println!("Using idx {} instead of {}", idx, old_idx);
-        for i in 0..9 { a[i] = 0.0; }
-        a[2] = r_us[idx] * (-r_psis[idx].sin() - rb / l * r_deltas[idx].tan() * r_psis[idx].cos()); // dpsi/du
-        a[5] = r_us[idx] * (r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin()); // dpsi/ddelta
-    };
-    let b_fun = |idx: f64, k: usize, x: &[f64], b: &mut [f64]| {
-        let old_idx = (idx * 2.0) as usize;
-        let idx = if improving {
-            old_idx
-        } else {
-            let mut new_idx = next_track_idx(old_idx, r_xs, r_ys, x) + old_idx - k * 2;
-            if new_idx >= r_xs.len() {
-                new_idx = r_xs.len() - 1;
-            }
-            new_idx
-        };
-        b[0] = r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin(); // dx/du
-        b[2] = r_psis[idx].sin() + rb / l * r_deltas[idx].tan() * r_psis[idx].cos(); // dy/du
-        b[1] = -rb / l * r_us[idx] * r_psis[idx].sin() / r_deltas[idx].cos().powi(2); // dx/ddelta
-        b[3] = rb / l * r_us[idx] * r_psis[idx].cos() / r_deltas[idx].cos().powi(2); // dy/ddelta
-        b[4] = r_deltas[idx].tan() / l; // dpsi/du
-        b[5] = r_us[idx] / (r_deltas[idx].cos().powi(2) * l); // dpsi/ddelta
+        let state = [r_xs[idx], r_us[idx], r_ys[idx], r_vs[idx], r_psis[idx], r_rs[idx]];
+        let controls = [r_deltas[idx], r_fxs[idx]];
+        bike_derivatives(&state, &controls, a, b);
     };
     let ode_fun = |_t: f64, x: &[f64], u: &[f64], x_new: &mut[f64]| {
-        let u_val = u[0];
-        let delta_val = u[1];
-        x_new[0] = u_val * (x[2].cos() - rb / l * delta_val.tan() * x[2].sin());
-        x_new[1] = u_val * (x[2].sin() + rb / l * delta_val.tan() * x[2].cos());
-        x_new[2] = u_val / l * delta_val.tan();
+        bike_fun(x, u[0], u[1], x_new);
     };
 
-    let x0 = [287.0, -176.0, 2.0];
+    let x0 = [287.0, 5.0, -176.0, 0.0, 2.0, 0.0];
 
+    let dt = 0.1;
     let t_span = (0..n_steps).map(|i: usize| i as f64 * dt).collect::<Vec<_>>();
 
-    let u_lb = vec![-1000.0, -0.5*10.0];
-    let u_ub = vec![1000.0, 0.5*10.0];
+    let u_lb = vec![-0.5, -5000.0];
+    let u_ub = vec![0.5, 2500.0];
 
     let start_time = precise_time_s();
-    let (xs, us) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon, &ref_x, &ref_u, &ode_fun,
-                            &[], &[], &[], &[],
-                            &[], &[], &u_lb, &u_ub, &x0);
+    let (xs, us) = mpc_ltv(&ab_fun, &q, &r, &t_span, horizon, obj_x, ref_x, ref_u, &ode_fun,
+                           &[], &[], &[], &[],
+                           &[], &[], &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
-    report_trajectory_error(n_steps, &xs, r_xs, r_ys);
+    report_trajectory_error(n_steps, &xs, &obj_x[0..total_steps], &obj_x[total_steps*2..total_steps*3]);
 
     (xs, us)
 }
@@ -1402,11 +1564,13 @@ fn resample_center_line(cline: &[f64], thetas: &[f64], n_divisions: usize) -> (V
         sum_distances[i] = sum_distances[i - 1] + d;
     }
     let total_dist = sum_distances.last().unwrap();
+    println!("Total track length: {}", total_dist);
+    println!("Number of reference points: {}\n", thetas.len());
     let mut new_clines = vec![0.0; 2 * n_divisions];
     let mut new_thetas = vec![0.0; n_divisions];
     for i in 0..n_divisions {
         let target_d = total_dist / ((n_divisions - 1) as f64) * i as f64;
-        let idx2 = sum_distances.iter().position(|&d| d >= target_d).unwrap();
+        let idx2 = sum_distances.iter().position(|&d| d >= target_d).unwrap_or(sum_distances.len() - 1);
         if idx2 == 0 {
             new_clines[0] = cxs[0];
             new_clines[n_divisions] = cys[0];
@@ -1432,52 +1596,69 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
     // use line-like ellipses to approximate boundaries and obstacles
     // really think about _scaling_ of your values for the optimization
 
-    let n = 3;
+    let n = 6;
     let m = 2;
     let ref_steps = tp.thetas.len();
     // extra 2x factor for the half-steps needed by rk2/rk4
     let itermediate_steps = 2;
-    let base_step_factor = 4;
+    let base_step_factor = 6;
     let step_factor = base_step_factor * itermediate_steps;
     let total_steps = ref_steps * step_factor;
     let n_steps = total_steps / itermediate_steps;
-    let horizon = 11 * base_step_factor;
+    let horizon = 8*2;//11 * base_step_factor;
 
-    let q = vec![2., 2., 20.0];
-    let r = vec![0.002, 2.0];
+    let q = vec![2., 0., 2., 0., 1., 0.];
+    let r = vec![1000.0, 0.0001];
 
     let (cline, thetas) = resample_center_line(&tp.cline, &tp.thetas, total_steps);
 
     let mut ref_x = vec![0.0; total_steps * n];
-    ref_x[0..total_steps*2].copy_from_slice(&cline);
-    ref_x[total_steps*2..total_steps*3].copy_from_slice(&thetas);
+    ref_x[0..total_steps].copy_from_slice(&cline[0..total_steps]);
+    ref_x[total_steps..total_steps*2].copy_from_slice(&vec![20.0; total_steps]);
+    ref_x[total_steps*2..total_steps*3].copy_from_slice(&cline[total_steps..total_steps*2]);
+    ref_x[total_steps*3..total_steps*4].copy_from_slice(&vec![0.0; total_steps]);
+    ref_x[total_steps*4..total_steps*5].copy_from_slice(&thetas);
+    ref_x[total_steps*5..total_steps*6].copy_from_slice(&vec![0.0; total_steps]);
     let ref_x = ref_x;
     let mut ref_u = vec![0.0f64; total_steps * m];
-    ref_u[0..total_steps].copy_from_slice(&vec![0.1; total_steps]);
+    ref_u[0..total_steps].copy_from_slice(&vec![0.0; total_steps]);
     ref_u[total_steps..total_steps*2].copy_from_slice(&vec![0.0; total_steps]);
     let ref_u = ref_u;
-    let (mut xs, mut us) = solve_mpc_iteration(n, horizon, n_steps, false, &q, &r, &ref_x, &ref_u);
+    let (mut xs, mut us) = solve_mpc_iteration(n, horizon, n_steps, false, &q, &r, &ref_x, &ref_x, &ref_u);
 
-    for _i in 0..0 {
+    for _k in 0..10 {
+        let mut new_ref_x = vec![0.0; total_steps * n];
+        for i in 0..n_steps {
+            for j in 0..n {
+                new_ref_x[total_steps * j + i * 2] = xs[i][j];
+                new_ref_x[total_steps * j + i * 2 + 1] = xs[i][j];
+            }
+        }
         let mut new_ref_u = vec![0.0; total_steps * m];
         for i in 0..n_steps-1 {
-            new_ref_u[i * 2] = us[i][0];
-            new_ref_u[i * 2 + 1] = us[i][0];
-            new_ref_u[i * 2 + total_steps] = us[i][1];
-            new_ref_u[i * 2 + total_steps + 1] = us[i][1];
+            for j in 0..m {
+                new_ref_u[total_steps * j + i * 2] = us[i][j];
+                new_ref_u[total_steps * j + i * 2 + 1] = us[i][j];
+            }
         }
         let new_ref_u = new_ref_u;
 
-        let q = vec![2., 2., 20.0];
-        let r = vec![0.001e8, 2.0e8];
-        let (new_xs, new_us) = solve_mpc_iteration(n, horizon, n_steps, false, &q, &r, &ref_x, &new_ref_u);
+        let mut obj_x = new_ref_x.clone();
+        obj_x[0..total_steps].copy_from_slice(&cline[0..total_steps]);
+        obj_x[total_steps*2..total_steps*3].copy_from_slice(&cline[total_steps..total_steps*2]);
+        // obj_x[total_steps*4..total_steps*5].copy_from_slice(&thetas);
+
+        let q = vec![1., 0., 1., 0., 0., 0.];
+        let r = vec![1000.0e6, 0.0001e6];
+        let (new_xs, new_us) = solve_mpc_iteration(n, 12, n_steps, true, &q, &r, &obj_x, &new_ref_x, &new_ref_u);
+
         xs = new_xs;
         us = new_us;
     }
 
     if true {
         let r_xs = &ref_x[0..total_steps];
-        let r_ys = &ref_x[total_steps..total_steps*2];
+        let r_ys = &ref_x[total_steps*2..total_steps*3];
         plot_trajectory(&tp, n_steps, &xs, r_xs, r_ys);
     }
 
@@ -1493,7 +1674,7 @@ pub fn run_problem1() {
     let (bl, br, cline, thetas) = load_test_track();
     let tp = TrackProblem { bl: &bl, br: &br, cline: &cline, thetas: &thetas,
                             n_obs: 0, obs_x: &[], obs_y: &[] };
-    let mut controls = vec![0.0; 1024 * 2];
+    let mut controls = vec![0.0; 2048 * 2];
     solve_control_problem(tp, &mut controls);
 }
 
@@ -1638,14 +1819,12 @@ pub fn mpc_test() {
     let l = 3.0; // wheelbase
     let rb = 1.5; // rear wheel to center of mass
 
-    let a_fun = |idx: f64, _: usize, _: &[f64], a: &mut [f64]| {
+    let ab_fun = |idx: f64, _: usize, _: &[f64], a: &mut [f64], b: &mut [f64]| {
         let idx = (idx * 2.0).round() as usize;
         for i in 0..9 { a[i] = 0.0; }
         a[2] = r_us[idx] * (-r_psis[idx].sin() - rb / l * r_deltas[idx].tan() * r_psis[idx].cos()); // dpsi/du
         a[5] = r_us[idx] * (r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin()); // dpsi/ddelta
-    };
-    let b_fun = |idx: f64, _: usize, _: &[f64], b: &mut [f64]| {
-        let idx = (idx * 2.0).round() as usize;
+
         b[0] = r_psis[idx].cos() - rb / l * r_deltas[idx].tan() * r_psis[idx].sin(); // dx/du
         b[2] = r_psis[idx].sin() + rb / l * r_deltas[idx].tan() * r_psis[idx].cos(); // dy/du
         b[1] = -rb / l * r_us[idx] * r_psis[idx].sin() / r_deltas[idx].cos().powi(2); // dx/ddelta
@@ -1678,7 +1857,7 @@ pub fn mpc_test() {
     let u_ub = vec![1.0, 0.5];
 
     let start_time = precise_time_s();
-    let (xs, _us) = mpc_ltv(&a_fun, &b_fun, &q, &r, &t_span, horizon, &ref_x, &ref_u, &ode_fun,
+    let (xs, _us) = mpc_ltv(&ab_fun, &q, &r, &t_span, horizon, &ref_x, &ref_x, &ref_u, &ode_fun,
                             &a_x_constraints, &b_x_constraints, &a_u_constraints, &b_u_constraints,
                             &x_lb, &x_ub, &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
@@ -1757,4 +1936,63 @@ pub fn bike_test() {
         println!("");
     }
     trajectory_stays_on_track(&x_all);
+}
+
+pub fn bike_derivative_test() {
+    let state = [287.0, 5.0, -176.0, 0.0, 2.0, 0.0];
+    let controls = [0.0, 0.0];
+    let mut analytic_a = [0.0; 6*6];
+    let mut analytic_b = [0.0; 2*6];
+    bike_derivatives(&state, &controls, &mut analytic_a, &mut analytic_b);
+
+    let delta = f64::EPSILON.sqrt();
+
+    let mut numeric_a = [0.0; 6*6];
+    let mut numeric_b = [0.0; 2*6];
+    let mut dx1 = [0.0; 6];
+    let mut dx2 = [0.0; 6];
+    let mut state_mut = [0.0; 6];
+    for i in 0..6 {
+        state_mut.copy_from_slice(&state);
+        let diff = state[i] * delta + delta;
+        state_mut[i] -= diff;
+        bike_fun(&state_mut, 0.0, 0.0, &mut dx1);
+        state_mut[i] += 2.0 * diff;
+        bike_fun(&state_mut, 0.0, 0.0, &mut dx2);
+
+        for j in 0..6 {
+            numeric_a[j * 6 + i] = (dx2[j] - dx1[j]) / (2.0 * diff);
+        }
+    }
+
+    let mut dx0 = [0.0; 6];
+    bike_fun(&state, 0.0, 0.0, &mut dx0);
+
+    for i in 0..2 {
+        let delta_f = if i == 0 { -delta } else { 0.0 };
+        let f_x = if i == 1 { -delta } else { 0.0 };
+        bike_fun(&state, delta_f, f_x, &mut dx1);
+        let delta_f = if i == 0 { delta } else { 0.0 };
+        let f_x = if i == 1 { delta } else { 0.0 };
+        bike_fun(&state, delta_f, f_x, &mut dx2);
+
+        for j in 0..6 {
+            numeric_b[j * 2 + i] = (dx2[j] - dx1[j]) / (2.0 * delta);
+        }
+    }
+
+    println!("Analytic A       Numeric A");
+    for i in 0..6*6 {
+        println!("{:10.6}\t{:10.6}", analytic_a[i], numeric_a[i]);
+        if i > 0 && (i % 6) == 5 {
+            println!();
+        }
+    }
+    println!("Analytic B       Numeric B");
+    for i in 0..2*6 {
+        println!("{:10.6}\t{:10.6}", analytic_b[i], numeric_b[i]);
+        if i > 0 && (i % 2) == 1 {
+            println!();
+        }
+    }
 }
