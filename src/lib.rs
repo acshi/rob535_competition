@@ -1534,7 +1534,7 @@ fn solve_mpc_iteration(tp: &TrackProblem, n: usize, dt: f64, horizon: usize, n_s
     let constraints_fun = |idx: usize, k: usize, x: &[f64], coefs: &mut [f64], rhs: &mut [f64]| {
         let old_idx = idx * 2;
         let horizon_idx = idx - k;
-        if horizon_idx >= 1 {
+        if horizon_idx >= 0 {
             return;
         }
 
@@ -1570,7 +1570,7 @@ fn solve_mpc_iteration(tp: &TrackProblem, n: usize, dt: f64, horizon: usize, n_s
         rhs[1] = r_bound;
     };
 
-    if true {
+    if false {
         let track_n = tp.thetas.len();
         let mut small_lines = Vec::new();
         let mut ax = Axes2D::new()
@@ -1732,23 +1732,23 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
     let tp = resample_track(&tp, total_steps);
     // let (cline, thetas) = resample_center_line(&tp.cline, &tp.thetas, total_steps);
 
-    // let mut ref_x = vec![0.0; total_steps * n];
-    // ref_x[0..total_steps].copy_from_slice(&cline[0..total_steps]);
-    // ref_x[total_steps..total_steps*2].copy_from_slice(&vec![20.0; total_steps]);
-    // ref_x[total_steps*2..total_steps*3].copy_from_slice(&cline[total_steps..total_steps*2]);
-    // ref_x[total_steps*3..total_steps*4].copy_from_slice(&vec![0.0; total_steps]);
-    // ref_x[total_steps*4..total_steps*5].copy_from_slice(&thetas);
-    // ref_x[total_steps*5..total_steps*6].copy_from_slice(&vec![0.0; total_steps]);
-    let mut base_ref_x = vec![0.0; n_steps * n];
-    fill_from_csv("matlab/max_ref_x.csv", &mut base_ref_x).unwrap();
-    let ref_x = lin_upsample(n, &base_ref_x, 2);
-    // let ref_x = ref_x;
-    // let mut ref_u = vec![0.0f64; total_steps * m];
-    // ref_u[0..total_steps].copy_from_slice(&vec![0.0; total_steps]);
-    // ref_u[total_steps..total_steps*2].copy_from_slice(&vec![0.0; total_steps]);
-    let mut base_ref_u = vec![0.0; n_steps * m];
-    fill_from_csv("matlab/max_ref_u.csv", &mut base_ref_u).unwrap();
-    let ref_u = lin_upsample(m, &base_ref_u, 2);
+    let mut ref_x = vec![0.0; total_steps * n];
+    ref_x[0..total_steps].copy_from_slice(&tp.cline[0..total_steps]);
+    ref_x[total_steps..total_steps*2].copy_from_slice(&vec![20.0; total_steps]);
+    ref_x[total_steps*2..total_steps*3].copy_from_slice(&tp.cline[total_steps..total_steps*2]);
+    ref_x[total_steps*3..total_steps*4].copy_from_slice(&vec![0.0; total_steps]);
+    ref_x[total_steps*4..total_steps*5].copy_from_slice(&tp.thetas);
+    ref_x[total_steps*5..total_steps*6].copy_from_slice(&vec![0.0; total_steps]);
+    // let mut base_ref_x = vec![0.0; n_steps * n];
+    // fill_from_csv("matlab/max_ref_x.csv", &mut base_ref_x).unwrap();
+    // let ref_x = lin_upsample(n, &base_ref_x, 2);
+    let ref_x = ref_x;
+    let mut ref_u = vec![0.0f64; total_steps * m];
+    ref_u[0..total_steps].copy_from_slice(&vec![0.0; total_steps]);
+    ref_u[total_steps..total_steps*2].copy_from_slice(&vec![0.0; total_steps]);
+    // let mut base_ref_u = vec![0.0; n_steps * m];
+    // fill_from_csv("matlab/max_ref_u.csv", &mut base_ref_u).unwrap();
+    // let ref_u = lin_upsample(m, &base_ref_u, 2);
     let ref_u = ref_u;
     let dt = 0.1; //0.0986;
     let (mut xs, mut us) = solve_mpc_iteration(&tp, n, dt, horizon, n_steps, false, &q, &r, &ref_x, &ref_x, &ref_u);
@@ -1784,7 +1784,7 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
         us = new_us;
     }
 
-    if true {
+    if false {
         let r_xs = &ref_x[0..total_steps];
         let r_ys = &ref_x[total_steps*2..total_steps*3];
         plot_trajectory(&tp, n_steps, &xs, r_xs, r_ys);
