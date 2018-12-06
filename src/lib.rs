@@ -377,6 +377,7 @@ where F: FnMut(usize, &[f64], &mut [f64]) {
 }
 
 // copy matrix b (whatever * m) to row, col in matrix a (whatever * n).
+#[allow(dead_code)]
 fn copy_mat(n: usize, a: &mut [f64], row: usize, col: usize, m: usize, b: &[f64]) {
     let mut target_i = n * row + col;
     let rows_b = b.len() / m;
@@ -711,14 +712,14 @@ where F: Fn(f64, &mut [f64], &mut [f64]) {
 
 // currently expects ref_x and ref_u to be twice as long as needed for the number of time steps
 // because that is how they would already need to be for a_fun and b_fun in the rk2/rk4 scenario
-fn mpc_ltv<F, H>(ab_fun: &F, q_diag: &[f64], r_diag: &[f64],
-                 t_span: &[f64], horizon: usize,
-                 obj_x: &[f64], ref_x: &[f64], ref_u: &[f64], ode_fun: &H,
-                 a_x_constraints: &[f64], b_x_constraints: &[f64],
-                 a_u_constraints: &[f64], b_u_constraints: &[f64],
-                 x_lb: &[f64], x_ub: &[f64],
-                 u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
+fn mpc_ltv<F, G, H>(ab_fun: &F, q_diag: &[f64], r_diag: &[f64],
+                   t_span: &[f64], horizon: usize,
+                   obj_x: &[f64], ref_x: &[f64], ref_u: &[f64], ode_fun: &H,
+                   x_constraints_fun: &G,
+                   x_lb: &[f64], x_ub: &[f64],
+                   u_lb: &[f64], u_ub: &[f64], x0: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>)
 where F: Fn(f64, usize, &[f64], &mut [f64], &mut [f64]),
+      G: Fn(usize, usize, &[f64], &mut [f64], &mut [f64]),
       H: Fn(f64, &[f64], &[f64], &mut[f64]) {
     let n = x0.len();
     assert_eq!(q_diag.len(), n);
@@ -745,31 +746,6 @@ where F: Fn(f64, usize, &[f64], &mut [f64], &mut [f64]),
         quadratic_cost_diag[idx..idx+m].copy_from_slice(&r_diag);
     }
 
-    // figure out the number of inequalities per decision variable
-    let ineq_per_x = a_x_constraints.len() / n / n;
-    assert_eq!(a_x_constraints.len(), ineq_per_x * n * n);
-    assert_eq!(b_x_constraints.len(), ineq_per_x * n);
-
-    let ineq_per_u = a_u_constraints.len() / m / m;
-    assert_eq!(a_u_constraints.len(), ineq_per_u * m * m);
-    assert_eq!(b_u_constraints.len(), ineq_per_u * m);
-
-    let n_ineq = ineq_per_x * n * horizon + ineq_per_u * m * (horizon - 1);
-    let mut a_ineq = vec![0.0; n_ineq * n_dec];
-    let mut b_ineq = vec![0.0; n_ineq];
-    for i in 0..horizon {
-        let row = ineq_per_x * n * i;
-        let col = n * i;
-        copy_mat(n_dec, &mut a_ineq, row, col, n, &a_x_constraints);
-        copy_mat(1, &mut b_ineq, row, 0, 1, &b_x_constraints);
-    }
-    for i in 0..horizon-1 {
-        let row = ineq_per_x * n * horizon + ineq_per_u * m * i;
-        let col = n * horizon + m * i;
-        copy_mat(n_dec, &mut a_ineq, row, col, m, &a_u_constraints);
-        copy_mat(1, &mut b_ineq, row, 0, 1, &b_u_constraints);
-    }
-
     // set bounds to infinities for the default
     let cplex_inf = 1.0e+20;
     let mut lb = vec![-cplex_inf; n_dec];
@@ -780,6 +756,22 @@ where F: Fn(f64, usize, &[f64], &mut [f64], &mut [f64]),
     assert_eq!(x_ub.len(), x_lb.len());
     assert!(u_lb.len() == m || u_lb.len() == 0);
     assert_eq!(u_ub.len(), u_lb.len());
+
+    // one-time static matrices for setting inequality constraints
+    let n_ineq = horizon * 2; // each x, y pair will have linearized limits on two sides
+    let mut constraint_idxs = vec![0; n_ineq * 2];
+    let mut column_idxs = vec![0; n_ineq * 2];
+    let mut le_coefs = vec![0.0; n_ineq * 2];
+    let mut le_rhs = vec![0.0; n_ineq];
+    for i in 0..horizon {
+        for j in 0..=1 {
+            let idx = i * 2 + j;
+            constraint_idxs[idx * 2] = idx as i32;
+            constraint_idxs[idx * 2 + 1] = idx as i32;
+            column_idxs[idx * 2] = (n * i) as i32; // x
+            column_idxs[idx * 2 + 1] = (n * i + 2) as i32; // y
+        }
+    }
 
     // Finally, for each time step, we set up equality constraints on the states
     // (only as far as our forward horizon)
@@ -796,10 +788,6 @@ where F: Fn(f64, usize, &[f64], &mut [f64], &mut [f64]),
     let mut linear_cost = vec![0.0; n_dec];
     let mut qp = QuadProg::new(n_dec, &linear_cost, &lb, &ub, n_ineq, n_eq);
     qp.diagonal_quadratic_cost(&quadratic_cost_diag);
-
-    if n_ineq > 0 {
-        qp.dense_le_constraints(&a_ineq, &b_ineq);
-    }
 
     let mut solved_vars = vec![0.0; n_dec];
 
@@ -825,6 +813,16 @@ where F: Fn(f64, usize, &[f64], &mut [f64], &mut [f64]),
         let horizon_left = n_steps - k;
         let valid_horizon = if horizon_left < horizon { horizon_left } else { horizon };
 
+        // set up linearized constraints
+        for i in 0..valid_horizon {
+            x_constraints_fun(k + i, k, &xs[k], &mut le_coefs[i*4..i*4+4], &mut le_rhs[i*2..i*2+2]);
+        }
+        for i in valid_horizon..horizon {
+            le_coefs[i*4..i*4+4].copy_from_slice(&[0.0; 4]);
+            le_rhs[i*2..i*2+2].copy_from_slice(&[0.0; 2]);
+        }
+        qp.sparse_le_constraints(&constraint_idxs, &column_idxs, &le_coefs, &le_rhs);
+
         // for initial conditions, all other values stay at 0
         b_eq[0..n].copy_from_slice(&xs[k]);
         for i in 0..n {
@@ -836,7 +834,11 @@ where F: Fn(f64, usize, &[f64], &mut [f64], &mut [f64]),
         for i in 0..valid_horizon {
             for j in 0..n {
                 let ref_idx = (n_steps * j + k + i) * 2;
-                linear_cost[i*n+j] = 2.0 * (obj_x[ref_idx] - ref_x[ref_idx]);
+                let mut obj_idx = ref_idx;
+                if false && i >= horizon - 4 && horizon_left > i + 1 {
+                    obj_idx += 2;
+                }
+                linear_cost[i*n+j] = 2.0 * (obj_x[obj_idx] - ref_x[ref_idx]);
             }
         }
         qp.linear_cost(&linear_cost);
@@ -1115,7 +1117,13 @@ fn fill_from_csv(filename: &str, vals: &mut [f64]) -> std::io::Result<()> {
     let mut buf_i = 0;
     for i in 0..vals.len() {
         let mut next_nondigit = buf_i;
-        while is_float_digit(buf[next_nondigit] as char) {
+        loop {
+            if next_nondigit >= buf.len() {
+                panic!("Only got {} values from {}, expected {}", i, filename, vals.len());
+            }
+            if !is_float_digit(buf[next_nondigit] as char) {
+                break;
+            }
             next_nondigit += 1;
         }
         vals[i] = String::from_utf8(buf[buf_i..next_nondigit].to_owned()).unwrap().parse().unwrap();
@@ -1215,14 +1223,14 @@ fn trajectory_stays_on_track(x_all: &[f64]) -> bool {
 }
 
 #[allow(dead_code)]
-struct TrackProblem<'a> {
-    bl: &'a [f64],
-    br: &'a [f64],
-    cline: &'a [f64],
-    thetas: &'a [f64],
+struct TrackProblem {
+    bl: Vec<f64>,
+    br: Vec<f64>,
+    cline: Vec<f64>,
+    thetas: Vec<f64>,
     n_obs: usize,
-    obs_x: &'a [f64],
-    obs_y: &'a [f64],
+    obs_x: Vec<f64>,
+    obs_y: Vec<f64>,
 }
 
 #[no_mangle]
@@ -1234,12 +1242,12 @@ pub extern fn solve_obstacle_problem(n_track: i32, bl: *const f64, br: *const f6
     let n_obs = n_obs as usize;
     let n_max_controls = unsafe { *n_controls as usize };
 
-    let bl = unsafe { slice::from_raw_parts(bl, n_track * 2) };
-    let br = unsafe { slice::from_raw_parts(br, n_track * 2) };
-    let cline = unsafe { slice::from_raw_parts(cline, n_track * 2) };
-    let thetas = unsafe { slice::from_raw_parts(thetas, n_track) };
-    let obs_x = unsafe { slice::from_raw_parts(obs_x, n_obs * 4) };
-    let obs_y = unsafe { slice::from_raw_parts(obs_y, n_obs * 4) };
+    let bl = unsafe { slice::from_raw_parts(bl, n_track * 2).to_vec() };
+    let br = unsafe { slice::from_raw_parts(br, n_track * 2).to_vec() };
+    let cline = unsafe { slice::from_raw_parts(cline, n_track * 2).to_vec() };
+    let thetas = unsafe { slice::from_raw_parts(thetas, n_track).to_vec() };
+    let obs_x = unsafe { slice::from_raw_parts(obs_x, n_obs * 4).to_vec() };
+    let obs_y = unsafe { slice::from_raw_parts(obs_y, n_obs * 4).to_vec() };
     let controls = unsafe { slice::from_raw_parts_mut(controls, n_max_controls * 2) };
 
     let tp = TrackProblem { bl, br, cline, thetas, n_obs, obs_x, obs_y };
@@ -1503,7 +1511,15 @@ fn report_trajectory_error(n_steps: usize, xs: &[Vec<f64>], r_xs: &[f64], r_ys: 
     println!("Mean square error: {}\n", mean_square_error);
 }
 
-fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, improving: bool, q: &[f64], r: &[f64], obj_x: &[f64], ref_x: &[f64], ref_u: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+fn lin_interp(pos: f64, vals: &[f64]) -> f64 {
+    let idx2 = ((pos + 1.0) as usize).min(vals.len() - 1).max(1);
+    let idx1 = idx2 - 1;
+    let alpha = idx2 as f64 - pos;
+    vals[idx1] * alpha + (1.0 - alpha) * vals[idx2]
+}
+
+fn solve_mpc_iteration(tp: &TrackProblem, n: usize, dt: f64, horizon: usize, n_steps: usize, improving: bool,
+                       q: &[f64], r: &[f64], obj_x: &[f64], ref_x: &[f64], ref_u: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     let total_steps = ref_x.len() / n;
     let r_xs = &ref_x[0..total_steps];
     let r_us = &ref_x[total_steps..total_steps*2];
@@ -1515,12 +1531,103 @@ fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, improving: bool
     let r_deltas = &ref_u[0..total_steps];
     let r_fxs = &ref_u[total_steps..total_steps*2];
 
-    let ab_fun = |idx: f64, k: usize, x: &[f64], a: &mut [f64], b: &mut [f64]| {
-        let old_idx = (idx * 2.0) as usize;
-        let idx = if improving {
+    let constraints_fun = |idx: usize, k: usize, x: &[f64], coefs: &mut [f64], rhs: &mut [f64]| {
+        let old_idx = idx * 2;
+        let horizon_idx = idx - k;
+        if horizon_idx >= 1 {
+            return;
+        }
+
+        let idx = if false && improving {
             old_idx
         } else {
-            let mut new_idx = next_track_idx(old_idx, r_xs, r_ys, x[0], x[2]) + old_idx - k * 2;
+            let mut new_idx = next_track_idx(old_idx, r_xs, r_ys, x[0], x[2]) + 2 * horizon_idx;
+            if new_idx >= r_xs.len() {
+                new_idx = r_xs.len() - 1;
+            }
+            new_idx
+        };
+        let track_n = tp.thetas.len();
+        // let track_pos = (idx * track_n) as f64 / n_steps as f64;
+        let theta = tp.thetas[idx];//lin_interp(track_pos, &tp.thetas);
+        let bl_x = tp.bl[idx];//lin_interp(track_pos, &tp.bl[0..track_n]);
+        let bl_y = tp.bl[track_n+idx];//lin_interp(track_pos, &tp.bl[track_n..track_n*2]);
+        let br_x = tp.br[idx];//lin_interp(track_pos, &tp.br[0..track_n]);
+        let br_y = tp.br[track_n+idx];//lin_interp(track_pos, &tp.br[track_n..track_n*2]);
+
+        let (sint, cost) = theta.sin_cos();
+
+        // and then the sides of the section of track
+        let l_bound = sint * bl_x - cost * bl_y;
+        let r_bound = sint * br_x - cost * br_y;
+
+        // left bound becomes a >= constraint
+        coefs[0] = -sint;
+        coefs[1] = cost;
+        coefs[2] = sint;
+        coefs[3] = -cost;
+        rhs[0] = -l_bound;
+        rhs[1] = r_bound;
+    };
+
+    if true {
+        let track_n = tp.thetas.len();
+        let mut small_lines = Vec::new();
+        let mut ax = Axes2D::new()
+            .add(Line2D::new("")
+                .data(&tp.cline[0..track_n], &tp.cline[track_n..track_n*2])
+                .color("orange")
+                .linestyle("-")
+                .linewidth(1.0))
+            .add(Line2D::new("")
+                .data(&tp.bl[0..track_n], &tp.bl[track_n..track_n*2])
+                .color("green")
+                .linestyle("-"))
+            .add(Line2D::new("")
+                .data(&tp.br[0..track_n], &tp.br[track_n..track_n*2])
+                .color("green")
+                .linestyle("-"))
+            .xlabel("X")
+            .ylabel("Y");
+        for i in (0..track_n).step_by(20) {
+            let cx = tp.cline[i];
+            let cy = tp.cline[track_n + i];
+            let mut coefs = [0.0; 4];
+            let mut rhs = [0.0; 2];
+            constraints_fun(i/2, i/2, &[cx, 0.0, cy], &mut coefs, &mut rhs);
+            let d = cx * coefs[0] + cy * coefs[1];
+            for j in 0..=1 {
+                let s = if j == 1 { -1.0 } else { 1.0 };
+                let x1 = cx + coefs[j*2] * (rhs[j] - s * d) - 0.01 * coefs[j*2+1];
+                let x2 = cx + coefs[j*2] * (rhs[j] - s * d) + 0.01 * coefs[j*2+1];
+                let y1 = cy + coefs[j*2+1] * (rhs[j] - s * d) - 0.01 * coefs[j*2];
+                let y2 = cy + coefs[j*2+1] * (rhs[j] - s * d) + 0.01 * coefs[j*2];
+                let x_vals = [x1, x2];
+                let y_vals = [y1, y2];
+                small_lines.push(x_vals);
+                small_lines.push(y_vals);
+            }
+        }
+        for i in 0..small_lines.len()/2 {
+            ax = ax.add(Line2D::new("")
+                   .data(&small_lines[i*2], &small_lines[i*2 + 1])
+                   .color("blue")
+                   .linestyle("-")
+                   .marker("+")
+                   .linewidth(1.0));
+        }
+        let mut mpl = Matplotlib::new().unwrap();
+        ax.apply(&mut mpl).unwrap();
+        mpl.show().unwrap();
+        mpl.wait().unwrap();
+    }
+
+    let ab_fun = |idx: f64, k: usize, x: &[f64], a: &mut [f64], b: &mut [f64]| {
+        let old_idx = (idx * 2.0) as usize;
+        let idx = if false && improving {
+            old_idx
+        } else {
+            let mut new_idx = next_track_idx(old_idx, r_xs, r_ys, x[0], x[2]) + old_idx - 2 * k;
             if new_idx >= r_xs.len() {
                 new_idx = r_xs.len() - 1;
             }
@@ -1536,7 +1643,6 @@ fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, improving: bool
 
     let x0 = [287.0, 5.0, -176.0, 0.0, 2.0, 0.0];
 
-    let dt = 0.1;
     let t_span = (0..n_steps).map(|i: usize| i as f64 * dt).collect::<Vec<_>>();
 
     let u_lb = vec![-0.5, -5000.0];
@@ -1544,20 +1650,20 @@ fn solve_mpc_iteration(n: usize, horizon: usize, n_steps: usize, improving: bool
 
     let start_time = precise_time_s();
     let (xs, us) = mpc_ltv(&ab_fun, &q, &r, &t_span, horizon, obj_x, ref_x, ref_u, &ode_fun,
-                           &[], &[], &[], &[],
-                           &[], &[], &u_lb, &u_ub, &x0);
+                           &constraints_fun, &[], &[], &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
     report_trajectory_error(n_steps, &xs, &obj_x[0..total_steps], &obj_x[total_steps*2..total_steps*3]);
 
     (xs, us)
 }
 
-fn resample_center_line(cline: &[f64], thetas: &[f64], n_divisions: usize) -> (Vec<f64>, Vec<f64>) {
+#[allow(dead_code)]
+fn resample_track(tp: &TrackProblem, n_divisions: usize) -> TrackProblem {
     // first determine spacing between points on the center line
     // and sum the values
-    let n_points = cline.len() / 2;
-    let cxs = &cline[0..n_points];
-    let cys = &cline[n_points..n_points*2];
+    let n_points = tp.thetas.len();
+    let cxs = &tp.cline[0..n_points];
+    let cys = &tp.cline[n_points..n_points*2];
     let mut sum_distances = vec![0.0; n_points];
     for i in 1..n_points {
         let d = ((cxs[i] - cxs[i-1]).powi(2) + (cys[i] - cys[i-1]).powi(2)).sqrt();
@@ -1565,25 +1671,36 @@ fn resample_center_line(cline: &[f64], thetas: &[f64], n_divisions: usize) -> (V
     }
     let total_dist = sum_distances.last().unwrap();
     println!("Total track length: {}", total_dist);
-    println!("Number of reference points: {}\n", thetas.len());
+    println!("Number of reference points: {}\n", n_points);
+
+    let bl_xs = &tp.bl[0..n_points];
+    let bl_ys = &tp.bl[n_points..n_points*2];
+    let br_xs = &tp.br[0..n_points];
+    let br_ys = &tp.br[n_points..n_points*2];
+
     let mut new_clines = vec![0.0; 2 * n_divisions];
+    let mut new_bl = vec![0.0; 2 * n_divisions];
+    let mut new_br = vec![0.0; 2 * n_divisions];
     let mut new_thetas = vec![0.0; n_divisions];
     for i in 0..n_divisions {
         let target_d = total_dist / ((n_divisions - 1) as f64) * i as f64;
-        let idx2 = sum_distances.iter().position(|&d| d >= target_d).unwrap_or(sum_distances.len() - 1);
-        if idx2 == 0 {
-            new_clines[0] = cxs[0];
-            new_clines[n_divisions] = cys[0];
-            continue;
-        }
+        let idx2 = sum_distances.iter().position(|&d| d >= target_d).unwrap_or(sum_distances.len() - 1).max(1);
         let idx1 = idx2 - 1;
         let diff = sum_distances[idx2] - sum_distances[idx1];
         let alpha = (sum_distances[idx2] - target_d) / diff;
         new_clines[i] = cxs[idx1] * alpha + (1.0 - alpha) * cxs[idx2];
         new_clines[i+n_divisions] = cys[idx1] * alpha + (1.0 - alpha) * cys[idx2];
-        new_thetas[i] = thetas[idx1] * alpha + (1.0 - alpha) * thetas[idx2];
+
+        new_bl[i] = bl_xs[idx1] * alpha + (1.0 - alpha) * bl_xs[idx2];
+        new_bl[i+n_divisions] = bl_ys[idx1] * alpha + (1.0 - alpha) * bl_ys[idx2];
+
+        new_br[i] = br_xs[idx1] * alpha + (1.0 - alpha) * br_xs[idx2];
+        new_br[i+n_divisions] = br_ys[idx1] * alpha + (1.0 - alpha) * br_ys[idx2];
+
+        new_thetas[i] = tp.thetas[idx1] * alpha + (1.0 - alpha) * tp.thetas[idx2];
     }
-    (new_clines, new_thetas)
+    TrackProblem {bl: new_bl, br: new_br, cline: new_clines, thetas: new_thetas,
+                  n_obs: tp.n_obs, obs_x: tp.obs_x.to_vec(), obs_y: tp.obs_y.to_vec() }
 }
 
 fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
@@ -1598,35 +1715,45 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
 
     let n = 6;
     let m = 2;
-    let ref_steps = tp.thetas.len();
+    // let ref_steps = tp.thetas.len();
     // extra 2x factor for the half-steps needed by rk2/rk4
-    let itermediate_steps = 2;
-    let base_step_factor = 6;
-    let step_factor = base_step_factor * itermediate_steps;
-    let total_steps = ref_steps * step_factor;
-    let n_steps = total_steps / itermediate_steps;
+    // let itermediate_steps = 2;
+    // let base_step_factor = 6;
+    // let step_factor = base_step_factor * itermediate_steps;
+    // let total_steps = ref_steps * step_factor;
+    // let n_steps = total_steps / itermediate_steps;
+    let n_steps = 1379;
+    let total_steps = 1379*2;
     let horizon = 8*2;//11 * base_step_factor;
 
     let q = vec![2., 0., 2., 0., 1., 0.];
-    let r = vec![1000.0, 0.0001];
+    let r = vec![1000.0, 0.00001];
 
-    let (cline, thetas) = resample_center_line(&tp.cline, &tp.thetas, total_steps);
+    let tp = resample_track(&tp, total_steps);
+    // let (cline, thetas) = resample_center_line(&tp.cline, &tp.thetas, total_steps);
 
-    let mut ref_x = vec![0.0; total_steps * n];
-    ref_x[0..total_steps].copy_from_slice(&cline[0..total_steps]);
-    ref_x[total_steps..total_steps*2].copy_from_slice(&vec![20.0; total_steps]);
-    ref_x[total_steps*2..total_steps*3].copy_from_slice(&cline[total_steps..total_steps*2]);
-    ref_x[total_steps*3..total_steps*4].copy_from_slice(&vec![0.0; total_steps]);
-    ref_x[total_steps*4..total_steps*5].copy_from_slice(&thetas);
-    ref_x[total_steps*5..total_steps*6].copy_from_slice(&vec![0.0; total_steps]);
-    let ref_x = ref_x;
-    let mut ref_u = vec![0.0f64; total_steps * m];
-    ref_u[0..total_steps].copy_from_slice(&vec![0.0; total_steps]);
-    ref_u[total_steps..total_steps*2].copy_from_slice(&vec![0.0; total_steps]);
+    // let mut ref_x = vec![0.0; total_steps * n];
+    // ref_x[0..total_steps].copy_from_slice(&cline[0..total_steps]);
+    // ref_x[total_steps..total_steps*2].copy_from_slice(&vec![20.0; total_steps]);
+    // ref_x[total_steps*2..total_steps*3].copy_from_slice(&cline[total_steps..total_steps*2]);
+    // ref_x[total_steps*3..total_steps*4].copy_from_slice(&vec![0.0; total_steps]);
+    // ref_x[total_steps*4..total_steps*5].copy_from_slice(&thetas);
+    // ref_x[total_steps*5..total_steps*6].copy_from_slice(&vec![0.0; total_steps]);
+    let mut base_ref_x = vec![0.0; n_steps * n];
+    fill_from_csv("matlab/max_ref_x.csv", &mut base_ref_x).unwrap();
+    let ref_x = lin_upsample(n, &base_ref_x, 2);
+    // let ref_x = ref_x;
+    // let mut ref_u = vec![0.0f64; total_steps * m];
+    // ref_u[0..total_steps].copy_from_slice(&vec![0.0; total_steps]);
+    // ref_u[total_steps..total_steps*2].copy_from_slice(&vec![0.0; total_steps]);
+    let mut base_ref_u = vec![0.0; n_steps * m];
+    fill_from_csv("matlab/max_ref_u.csv", &mut base_ref_u).unwrap();
+    let ref_u = lin_upsample(m, &base_ref_u, 2);
     let ref_u = ref_u;
-    let (mut xs, mut us) = solve_mpc_iteration(n, horizon, n_steps, false, &q, &r, &ref_x, &ref_x, &ref_u);
+    let dt = 0.1; //0.0986;
+    let (mut xs, mut us) = solve_mpc_iteration(&tp, n, dt, horizon, n_steps, false, &q, &r, &ref_x, &ref_x, &ref_u);
 
-    for _k in 0..10 {
+    for _k in 0..0 {
         let mut new_ref_x = vec![0.0; total_steps * n];
         for i in 0..n_steps {
             for j in 0..n {
@@ -1644,13 +1771,14 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
         let new_ref_u = new_ref_u;
 
         let mut obj_x = new_ref_x.clone();
-        obj_x[0..total_steps].copy_from_slice(&cline[0..total_steps]);
-        obj_x[total_steps*2..total_steps*3].copy_from_slice(&cline[total_steps..total_steps*2]);
+        obj_x[0..total_steps].copy_from_slice(&ref_x[0..total_steps]);
+        obj_x[total_steps*2..total_steps*3].copy_from_slice(&ref_x[total_steps*2..total_steps*3]);
         // obj_x[total_steps*4..total_steps*5].copy_from_slice(&thetas);
 
         let q = vec![1., 0., 1., 0., 0., 0.];
         let r = vec![1000.0e6, 0.0001e6];
-        let (new_xs, new_us) = solve_mpc_iteration(n, 12, n_steps, true, &q, &r, &obj_x, &new_ref_x, &new_ref_u);
+        // let dt = 0.099 - 0.001/4.0 * k as f64;
+        let (new_xs, new_us) = solve_mpc_iteration(&tp, n, dt, 12, n_steps, true, &q, &r, &obj_x, &new_ref_x, &new_ref_u);
 
         xs = new_xs;
         us = new_us;
@@ -1672,8 +1800,8 @@ fn solve_control_problem(tp: TrackProblem, controls: &mut [f64]) -> usize {
 
 pub fn run_problem1() {
     let (bl, br, cline, thetas) = load_test_track();
-    let tp = TrackProblem { bl: &bl, br: &br, cline: &cline, thetas: &thetas,
-                            n_obs: 0, obs_x: &[], obs_y: &[] };
+    let tp = TrackProblem { bl, br, cline, thetas,
+                            n_obs: 0, obs_x: vec![], obs_y: vec![] };
     let mut controls = vec![0.0; 2048 * 2];
     solve_control_problem(tp, &mut controls);
 }
@@ -1846,20 +1974,16 @@ pub fn mpc_test() {
     let q = vec![1., 1., 0.5];
     let r = vec![0.1, 0.01];
 
-    let a_x_constraints = vec![];
-    let b_x_constraints = vec![];
-    let a_u_constraints = vec![];
-    let b_u_constraints = vec![];
-
     let x_lb = vec![];
     let x_ub = vec![];
     let u_lb = vec![0.0, -0.5];
     let u_ub = vec![1.0, 0.5];
 
+    let no_constraints_fun = |_idx: usize, _k: usize, _x: &[f64], _coefs: &mut [f64], _rhs: &mut [f64]| {};
+
     let start_time = precise_time_s();
     let (xs, _us) = mpc_ltv(&ab_fun, &q, &r, &t_span, horizon, &ref_x, &ref_x, &ref_u, &ode_fun,
-                            &a_x_constraints, &b_x_constraints, &a_u_constraints, &b_u_constraints,
-                            &x_lb, &x_ub, &u_lb, &u_ub, &x0);
+                            &no_constraints_fun, &x_lb, &x_ub, &u_lb, &u_ub, &x0);
     println!("MPC took: {} seconds", precise_time_s() - start_time);
 
     // caclulate max distance error between the actual and nominal trajectories,

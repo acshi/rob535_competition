@@ -363,11 +363,11 @@ int qp_sparse_eq_constraints(CPXENVptr env, CPXLPptr qp, int n_eq, int n_coefs, 
     // we organize the == constraints after then <= ones
     // so we have to offset by the number of <= constraints
     int n_le = CPXgetnumrows(env, qp) - n_eq;
-    for (int i = 0; i < n_eq; i++) {
+    for (int i = 0; i < n_coefs; i++) {
         constraint_indices[i] += n_le;
     }
     int status = CPXchgcoeflist(env, qp, n_coefs, constraint_indices, column_indices, coefs);
-    for (int i = 0; i < n_eq; i++) {
+    for (int i = 0; i < n_coefs; i++) {
         constraint_indices[i] -= n_le;
     }
 
@@ -419,7 +419,8 @@ int qp_run(CPXENVptr env, CPXLPptr qp, double *obj_val, double *x_out) {
         return 0;
     }
     // found relaxed solution
-    if (solstat == CPX_STAT_FEASIBLE_RELAXED_QUAD) {
+    if (solstat == CPX_STAT_FEASIBLE_RELAXED_QUAD ||
+        solstat == CPX_STAT_OPTIMAL_RELAXED_QUAD) {
         return 0;
     }
     printf("Solution code: %d\n", solstat);
