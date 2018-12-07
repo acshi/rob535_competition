@@ -1,0 +1,30 @@
+function [sol] = fmincon_full_state(X_init, dt, x_ic, TestTrack, obs, obj_fun)
+
+% TODO provide gradients
+problem.solver = 'fmincon';
+nSteps = size(X_init, 1);
+problem.Aeq = [eye(6), zeros(6, 8*nSteps - 6)];
+problem.Beq = x_ic;
+%problem.objective = @(x) sol_time(x, TestTrack, dt);
+problem.objective = obj_fun;
+problem.nonlcon = @nonlcon;
+problem.x0 = reshape(X_init', [], 1);
+problem.lb = -inf(size(problem.x0));
+problem.ub = inf(size(problem.x0));
+problem.lb(7:8:end) = -.5;
+problem.ub(7:8:end) = .5;
+problem.lb(8:8:end) = -5000;
+problem.ub(8:8:end) = 2500;
+problem.options = optimoptions('fmincon', 'Display', 'final-detailed', 'SpecifyObjectiveGradient', true, 'SpecifyConstraintGradient', true, 'OptimalityTolerance', 1e-1); %  'MaxIterations', 2, 'CheckGradients', true,
+[h, g] = problem.nonlcon(problem.x0);
+s0 = problem.objective(problem.x0);
+sol = fmincon(problem);
+
+    function [C, Ceq,  dC, dCeq] = nonlcon(x)
+        [C, dC] = dist_to_obj(x, obs);
+        C = -C;
+        dC = -dC';
+        [Ceq, dCeq] = euler_cons(x, dt);
+        dCeq = dCeq';
+    end
+end

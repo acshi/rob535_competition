@@ -1,6 +1,8 @@
-function [d] = dist_to_obj(X, obs)
+function [d, dd] = dist_to_obj(X, obs)
+%tic;
 % Actually distance squared.
 d = zeros(size(X, 1)/8, 1);
+dd = zeros(size(X,1)/8, size(X,1));
 for i=1:size(X, 1)/8
     pos = [X(8*i - 7); X(8*i - 5)];
     s = sum((pos - obs.p0).*obs.dir, 1);
@@ -10,5 +12,9 @@ for i=1:size(X, 1)/8
     offset = pos - obs.p0(:,idx);
     cross = offset(1)*obs.dir(2,idx) - offset(2)*obs.dir(1,idx);
     d(i) = sign(cross)*d(i);
+    ddi = -sign(cross)*2*(s(idx).*obs.dir(:,idx) + obs.p0(:,idx) - pos);
+    dd(i, 8*i - 7) = ddi(1);
+    dd(i, 8*i - 5) = ddi(2);
 end
+%fprintf('dist_to_obj: %f\n', toc);
 end

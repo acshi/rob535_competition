@@ -47,19 +47,19 @@ A(y_ind, psi_ind) = u*cos(psi) - v*sin(psi);
 
 A(psi_ind, r_ind) = 1;
 
-d_alpha_f_d_df = 1;
-d_alpha_f_d_v = -u/(u^2 + (v + a*r)^2);
-d_alpha_f_d_u = (v + a*r)/(u^2 + (v + a*r)^2);
-d_alpha_f_d_r = -a*u/(u^2 +(v + a*r)^2);
+d_alpha_f_d_df = 180/pi;
+d_alpha_f_d_v = 180/pi*(-u/(u^2 + (v + a*r)^2));
+d_alpha_f_d_u = 180/pi*((v + a*r)/(u^2 + (v + a*r)^2));
+d_alpha_f_d_r = 180/pi*(-a*u/(u^2 +(v + a*r)^2));
 
-d_alpha_r_d_v = -u/(u^2 + (v - b*r)^2);
-d_alpha_r_d_u = (v - b*r)/(u^2 + (v - b*r)^2);
-d_alpha_r_d_r = b*u/(u^2 + (v - b*r)^2);
+d_alpha_r_d_v = 180/pi*(-u/(u^2 + (v - b*r)^2));
+d_alpha_r_d_u = 180/pi*((v - b*r)/(u^2 + (v - b*r)^2));
+d_alpha_r_d_r = 180/pi*(b*u/(u^2 + (v - b*r)^2));
 
-alpha_f = df - atan2((v + a*r), u);
-d_phi_d_alpha_f = (1 - Ey) + Ey/(1 + (By*(alpha_f*pi/180 + Shy))^2);
-alpha_r = -atan2((v - b*r), u);
-d_phi_d_alpha_r = (1 - Ey) + Ey/(1 + (By*(alpha_r*pi/180 + Shy))^2);
+alpha_f = 180/pi*(df - atan2(v + a*r, u));
+d_phi_d_alpha_f = (1 - Ey) + Ey/(1 + (By*(alpha_f + Shy))^2);
+alpha_r = 180/pi*(-atan2(v - b*r, u));
+d_phi_d_alpha_r = (1 - Ey) + Ey/(1 + (By*(alpha_r + Shy))^2);
 
 Fzr = a*m*g/(a + b);
 Fzf = b*m*g/(a + b);
@@ -71,8 +71,8 @@ d_Fyf_d_phi = Fzf*Dy*cos(Cy*atan(By*phi_f))*Cy*By/(1 + (By*phi_f)^2);
 Fyr = Fzr*Dy*sin(Cy*atan(By*phi_r)) + Svy;
 Fyf = Fzf*Dy*sin(Cy*atan(By*phi_f)) + Svy;
 
-Ftotal = 0.7*m*g;
-Fmax = sqrt((Nw*Fx)^2 + (Fyr)^2);
+Fmax = 0.7*m*g;
+Ftotal = sqrt((Nw*Fx)^2 + (Fyr)^2);
 
 if Ftotal > Fmax
     n = Fmax/Ftotal;
@@ -109,9 +109,9 @@ B(r_ind, df_ind) = (1/Iz)*(a*cos(df)*d_Fyf_d_df - a*Fyf*sin(df));
 
 A(u_ind, u_ind) = (1/m)*(Nw*d_Fsx_d_Fyr*d_Fyr_d_u - d_Fyf_d_u*sin(df));
 A(u_ind, v_ind) = (1/m)*(Nw*d_Fsx_d_Fyr*d_Fyr_d_v - d_Fyf_d_v*sin(df)) + r;
-A(u_ind, r_ind) = (1/m)*(Nw*d_Fsx_d_Fyr*d_Fyr_d_r - d_Fyr_d_r*sin(df)) + v;
+A(u_ind, r_ind) = (1/m)*(Nw*d_Fsx_d_Fyr*d_Fyr_d_r - d_Fyf_d_r*sin(df)) + v;
 B(u_ind, Fx_ind) = (1/m)*(Nw*d_Fsx_d_Fx);
-B(u_ind, df_ind) = (1/m)*(-sin(df)*d_Fyf_d_df - a*Fyf*cos(df));
+B(u_ind, df_ind) = (1/m)*(-sin(df)*d_Fyf_d_df - Fyf*cos(df));
 
 A(v_ind, u_ind) = (1/m)*(cos(df)*d_Fyf_d_u + d_Fsyr_d_u) - r;
 A(v_ind, v_ind) = (1/m)*(cos(df)*d_Fyf_d_v + d_Fsyr_d_v);
