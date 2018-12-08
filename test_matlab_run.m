@@ -1,8 +1,10 @@
 addpath('./SimPkg_F18_V1');
 
 load 'TestTrack.mat';
-% Xobs = generateRandomObstacles(10);
-% U = ROB599_ControlsProject_part2_Team5(TestTrack, Xobs);
+Xobs = generateRandomObstacles(10);
+U_short = ROB599_ControlsProject2_part2_Team5(TestTrack, Xobs);
+U = U_short;
+% U = repelem(U_short, 10, 1);
 x0 = [287; 5; -176; 0; 2; 0];
 [Y, ~] = forwardIntegrateControlInput(U, x0);
 info = getTrajectoryInfo(Y, U, Xobs, TestTrack);

@@ -2,7 +2,7 @@
 #include "matrix.h"
 
 // on windows needs some lib's explicitly specified. not sure why it doesn't auto-detect...
-// mex -R2018a -g rob535_competition_mex.c target/debug/rob535_competition.lib WS2_32.Lib Userenv.lib
+// mex -R2018a -g rob535_competition_mex.c target/release/rob535_competition.lib WS2_32.Lib Userenv.lib
 
 extern void solve_obstacle_problem(int n_track, const double *bl, const double *br,
                                    const double *cline, const double *thetas,

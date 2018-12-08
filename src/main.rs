@@ -11,17 +11,6 @@ use lib::*;
 
 fn main() {
     if false {
-        quadprog_test();
-        matmult_test();
-        axb_test();
-    }
-    if false {
-        lqr_test();
-    }
-    if false {
-        mpc_test();
-    }
-    if false {
         bike_test();
     }
     if false {
