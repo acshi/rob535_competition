@@ -1,5 +1,6 @@
 function X = fmincon_fh(x_ic, dt, TestTrack, XObs, obs)
-horizon = 75;
+horizon = 90;
+take = 10;
 X = zeros(1,8);
 % figure;
 % hold on;
@@ -18,18 +19,21 @@ h.YDataSource = 'plot_y';
 drawnow;
 
     
-for i=1:1000
+for i=1:take:1000
     disp(i);
     X_fh = fmincon_full_state(X_ic, dt, x_ic, TestTrack, obs, obj_fun);
-    X(i,:) = X_fh(1:8);
-    x_ic = X_fh(9:14)';
+    for j=0:take-1
+        X(i+j,:) = X_fh(8*j+1:8*j+8);
+    end
+    x_ic = X_fh(8*take + 1:8*take+6)';
 
     X_ic = zeros(horizon + 1, 8);
-    X_ic(1:horizon,:) = reshape(X_fh(9:end), 8, [])';
-    end_controls = X_ic(horizon - 1,7:8);
-    X_ic(horizon,7:8) = end_controls;
-    X_ic(horizon + 1,7:8) = end_controls;
-    X_ic(horizon + 1,1:6) = X_ic(horizon,1:6) + dt*nonl_bike(X_ic(horizon,1:8))';
+    X_ic(1:horizon + 1 - take,:) = reshape(X_fh(8*take+1:end), 8, [])';
+    end_controls = X_ic(horizon - take,7:8);
+    X_ic(horizon-take + 1:horizon+1,7:8) = repelem(end_controls, 11, 1);
+    for j=1:take
+        X_ic(horizon-take+j+1,1:6) = X_ic(horizon-take+j,1:6) + dt*nonl_bike(X_ic(horizon-take+j,1:8))';
+    end
   
 %     plot(X_ic(:,1), X_ic(:,3), '.');
 %     plot(X_fh(1:8:end), X_fh(3:8:end), '.');

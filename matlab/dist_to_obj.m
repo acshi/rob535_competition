@@ -2,7 +2,7 @@ function [d, dd] = dist_to_obj(X, obs)
 %tic;
 % Actually distance squared.
 d = zeros(size(X, 1)/8, 1);
-dd = sparse(size(X,1)/8, size(X,1));
+dd = spalloc(size(X,1)/8, size(X,1), 2*size(X,1)/8);
 for i=1:size(X, 1)/8
     pos = [X(8*i - 7); X(8*i - 5)];
     s = sum((pos - obs.p0).*obs.dir, 1);
