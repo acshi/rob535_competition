@@ -15,7 +15,9 @@ plot_y = X_ic(:,3);
 h = plot(plot_x, plot_y, '.');
 h.XDataSource = 'plot_x';
 h.YDataSource = 'plot_y';
+drawnow;
 
+    
 for i=1:1000
     disp(i);
     X_fh = fmincon_full_state(X_ic, dt, x_ic, TestTrack, obs, obj_fun);
@@ -39,8 +41,10 @@ for i=1:1000
     drawnow;
     
     pos = [X_fh(end-7); X_fh(end - 5)];
-    dist = norm(pos - TestTrack.cline(:, end));
-    if dist < 5
+    end_line = TestTrack.br(:,end) - TestTrack.bl(:,end);
+    offset = pos - TestTrack.bl(:,end);
+    
+    if end_line(1)*offset(2) - end_line(2)*offset(1) > 0
         for j = 1:horizon
             X(i+j,:) = X_fh(8*j + 1:8*j + 8);
         end
