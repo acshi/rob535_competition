@@ -6,15 +6,15 @@ k_psi = 10.;
 k_u = 1000.;
 u_min = 0.1;
 u_target = 15.;
-delta_min = -0.5;
-delta_max = 0.5;
-f_x_min = -5000.;
-f_x_max = 2500.;
+delta_min = -0.4;%-0.5;
+delta_max = 0.4;%0.5;
+f_x_min = -4000;%-5000.;
+f_x_max = 2000;%2500.;
 dt = 0.1;
 
 lookahead = 8;
 
-for i=1:10
+for i=1:nSteps
     force = electric_force([x(1); x(3)] + lookahead*[cos(x(5)); sin(x(5))], testTrack, XObs);
     force = force/norm(force);
     dir = [cos(x(5)); sin(x(5))];

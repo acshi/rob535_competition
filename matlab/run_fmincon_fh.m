@@ -27,3 +27,9 @@ hold on;
 plot(X(:,1), X(:,3));
 plot(TestTrack.bl(1,:), TestTrack.bl(2,:));
 plot(TestTrack.br(1,:), TestTrack.br(2,:));
+
+figure;
+hold on;
+plot(X(:,2));
+plot(X(:,4));
+plot(X(:,6)*10);
