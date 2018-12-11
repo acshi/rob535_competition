@@ -3,13 +3,13 @@ name = "rob535_competition"
 version = "0.1.0"
 authors = ["Acshi Haggenmiller <acshikh@umich.edu>"]
 build = "build.rs"
+edition = "2018"
 
 [dependencies]
-libc = "0.2.0"
+libc = "0.2.45"
 rustplotlib = "0.0.4"
-lapack = "0.16.0"
-blas = "0.20.0"
 time = "*"
+argmin = "0.1.6"
 
 [lib]
 name="rob535_competition"
