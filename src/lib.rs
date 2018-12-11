@@ -106,68 +106,6 @@ fn rad2deg(r: f64) -> f64 {
     return r * 180.0 / f64::consts::PI;
 }
 
-trait FastMath {
-    fn fast_atan(self) -> f64;
-    fn fast_atan2_inner(self, f64) -> f64;
-    fn fast_atan2(self, f64) -> f64;
-}
-
-impl FastMath for f64 {
-    fn fast_atan(self) -> f64 {
-        let z = self;
-        // if z >= -1.0 && z <= 1.0 {
-        //     let abs_val = z.abs();
-        //     let res = z * f64::consts::FRAC_PI_4 - z * (abs_val - 1.0) * (0.2447 + 0.0663 * abs_val);
-        //     return res;
-        // }
-        // print!("{}, ", self);
-        z.atan()
-    }
-
-    fn fast_atan2(self, x: f64) -> f64 {
-        let val1 = self.fast_atan2_inner(x);
-        // let val2 = self.atan2(x);
-        // let err = val2 - val1;
-        // print!("{}, ", err);
-        // if err.abs() > 0.01 {
-        //     println!("BAD!");
-        // }
-
-        val1
-    }
-
-    fn fast_atan2_inner(self, x: f64) -> f64 {
-        let y = self;
-        if x != 0.0 {
-            if x.abs() > y.abs() {
-                let z = y / x;
-                if x > 0.0 {
-                    z.fast_atan()
-                } else if y >= 0.0 {
-                    z.fast_atan() + f64::consts::PI
-                } else {
-                    z.fast_atan() - f64::consts::PI
-                }
-            } else {
-                let z = x / y;
-                if y > 0.0 {
-                    -z.fast_atan() + f64::consts::FRAC_PI_2
-                } else {
-                    -z.fast_atan() - f64::consts::FRAC_PI_2
-                }
-            }
-        } else {
-            if y > 0.0 {
-                f64::consts::FRAC_PI_2
-            } else if y < 0.0 {
-                -f64::consts::FRAC_PI_2
-            } else {
-                0.0
-            }
-        }
-    }
-}
-
 fn bike_fun(x: &[f64], delta_f: f64, mut f_x: f64, dx: &mut [f64]) {
     let nw = 2.0;
     let f = 0.01;
@@ -184,18 +122,18 @@ fn bike_fun(x: &[f64], delta_f: f64, mut f_x: f64, dx: &mut [f64]) {
     let g = 9.806;
 
     // slip angle functions in degrees
-    let a_f = rad2deg(delta_f - (x[3]+a*x[5]).fast_atan2(x[1]));
-    let a_r = rad2deg(-(x[3]-b*x[5]).fast_atan2(x[1]));
+    let a_f = rad2deg(delta_f - (x[3]+a*x[5]).atan2(x[1]));
+    let a_r = rad2deg(-(x[3]-b*x[5]).atan2(x[1]));
 
     // Nonlinear Tire dynamics
-    let phi_yf = (1.0-ey)*(a_f+shy)+(ey/by)*(by*(a_f+shy)).fast_atan();
-    let phi_yr = (1.0-ey)*(a_r+shy)+(ey/by)*(by*(a_r+shy)).fast_atan();
+    let phi_yf = (1.0-ey)*(a_f+shy)+(ey/by)*(by*(a_f+shy)).atan();
+    let phi_yr = (1.0-ey)*(a_r+shy)+(ey/by)*(by*(a_r+shy)).atan();
 
     let f_zf=b/(a+b)*m*g;
-    let f_yf=f_zf*dy*(cy*(by*phi_yf).fast_atan()).sin()+svy;
+    let f_yf=f_zf*dy*(cy*(by*phi_yf).atan()).sin()+svy;
 
     let f_zr=a/(a+b)*m*g;
-    let mut f_yr=f_zr*dy*(cy*(by*phi_yr).fast_atan()).sin()+svy;
+    let mut f_yr=f_zr*dy*(cy*(by*phi_yr).atan()).sin()+svy;
 
     let f_total=((nw*f_x).powi(2)+f_yr*f_yr).sqrt();
     let f_max=0.7*m*g;
@@ -633,7 +571,7 @@ fn local_refinement(tp: &TrackProblem, track_i: usize, dt: f64, k: usize, window
     solver.set_restart_iters(10);
     solver.set_restart_orthogonality(0.1);
     solver.run().unwrap();
-    let res = solver.result();
+    let _res = solver.result();
 }
 
 fn shooting_obj(tp: &TrackProblem, old_track_i: usize, horizon: usize, dt: f64, x0: &[f64], deltas: &[f64], fxs: &[f64]) -> f64 {

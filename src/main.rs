@@ -3,8 +3,8 @@ extern crate time;
 extern crate argmin;
 
 mod lib;
-pub use lib::solve_obstacle_problem;
-use lib::*;
+pub use crate::lib::solve_obstacle_problem;
+use crate::lib::*;
 
 fn main() {
     if true {
