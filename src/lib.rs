@@ -976,7 +976,9 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
             }
         }
 
-        while min_ssd < 0.5 {
+        let mut continue_clearing = true;
+        while min_ssd < 0.5 && continue_clearing {
+            continue_clearing = false;
             'outer: for k in (0..min_ssd_i).rev() {
                 if k % 50 == 0 {
                     println!("Steer k: {}", k);
@@ -1008,6 +1010,7 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
                             //     steps_used -= 1;
                             // }
                             if different_ssd_i {
+                                continue_clearing = true;
                                 break 'outer;
                             }
                         } else {
