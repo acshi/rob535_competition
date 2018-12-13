@@ -53,7 +53,7 @@ while true
     U(i, :) = [delta, f_x];
     X(i,:) = x;
     T = [0 dt];
-    [~,Y]=ode45(@(t,x)bike(t,x,T,[delta, delta; f_x, f_x]'),T,x);
+    [~,Y]=ode45(@(t,x)nonl_bike([x; delta; f_x]),T,x);
     x = Y(end, :);
     
     dist = sum(([x(1); x(3)] - testTrack.cline).^2,1);

@@ -1,5 +1,5 @@
-function [sol] = fmincon_full_state(X_init, dt, x_ic, TestTrack, obs, obj_fun)
-
+function [sol] = fmincon_full_state_global(X_init, dt, x_ic, TestTrack, obs, obj_fun)
+Fx_scale = 1000;
 problem.solver = 'fmincon';
 nSteps = size(X_init, 1);
 %problem.Aeq = [eye(6), zeros(6, 8*nSteps - 6)];
@@ -17,12 +17,13 @@ problem.Beq(1:6) = x_ic;
 problem.objective = obj_fun;
 problem.nonlcon = @nonlcon;
 problem.x0 = reshape(X_init', [], 1);
+%problem.x0(8:8:end) = problem.x0(8:8:end)/Fx_scale;
 problem.lb = -inf(size(problem.x0));
 problem.ub = inf(size(problem.x0));
 problem.lb(7:8:end) = -.5;
 problem.ub(7:8:end) = .5;
-problem.lb(8:8:end) = -5000;
-problem.ub(8:8:end) = 2500;
+problem.lb(8:8:end) = -5000/Fx_scale;
+problem.ub(8:8:end) = 2500/Fx_scale;
 
 % % Bound final speed.
 %problem.lb(end - 6) = 0;
@@ -49,7 +50,7 @@ sol = fmincon(problem);
         dC = -dC';
         %C = [];
         %dC = [];
-        [Ceq, dCeq] = euler_cons(x, dt);
+        [Ceq, dCeq] = rk4_cons(x, dt);
         dCeq = dCeq';
     end
 end

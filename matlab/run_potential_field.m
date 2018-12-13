@@ -1,6 +1,8 @@
 load TestTrack.mat;
 XObs = generateRandomObstacles(20, TestTrack);
+tic;
 [U_short, X] = potential_fields(TestTrack, XObs);
+toc
 
 figure;
 hold on;
@@ -8,7 +10,7 @@ plot(X(:,2));
 plot(U_short(:,2)/max(U_short(2,:)));
 
 U = repelem(U_short, 10, 1);
-[Y, T] = forwardIntegrateControlInput(U);
+[Y, T] = forwardIntegrateControlInput2(U);
 figure;
 hold on;
 plot(X(:,1), X(:,3), '.');

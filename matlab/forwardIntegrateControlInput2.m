@@ -1,6 +1,9 @@
-function [Y,T]=forwardIntegrateControlInput(U,x0)
-% function [Y] = forwardIntegrateControlInput(U,x0)
+function [Y,T]=forwardIntegrateControlInput2(U,x0)
+% function [Y] = forwardIntegrateControlInput2(U,x0)
 % 
+% This function operates the same as forwardIntegrateControlInputs but uses
+% more precise relative tolerances for ode45. 
+%
 % Given a set of inputs and an initial condition, returns the vehicles
 % trajectory. If no initial condition is specified the default for the track
 % is used.
@@ -32,8 +35,9 @@ end
 T=0:0.01:(size(U,1)-1)*0.01;
 
 
-%Solve for trajectory
-[~,Y]=ode45(@(t,x)bike(t,x,T,U),T,x0);
+%Solve for trajectory  
+options = odeset('RelTol', 1e-6, 'AbsTol', 1e-6);
+[~,Y]=ode45(@(t,x)bike(t,x,T,U),T,x0,options);
 end
 
 function dzdt=bike(t,x,T,U)
@@ -89,3 +93,5 @@ dzdt= [x(2)*cos(x(5))-x(4)*sin(x(5));...
           x(6);...
           (F_yf*a*cos(delta_f)-F_yr*b)/Iz];
 end
+
+
