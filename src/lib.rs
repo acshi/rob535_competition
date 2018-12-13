@@ -985,8 +985,12 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
                 }
 
                 // try to increase steering for better clearance
-                for inc in [0.5, 0.1, 0.025].iter() {
-                    while controls[k] != 0.0 && controls[k].abs() < 0.5 && min_ssd < 0.5 {
+                for &inc in [0.5, 0.1, 0.025, -0.025].iter() {
+                    // last negative element only intended for 0.0 control values
+                    if controls[k] != 0.0 && inc < 0.0 {
+                        break;
+                    }
+                    while controls[k].abs() < 0.5 && min_ssd < 0.5 {
                         controls[k] = (controls[k] + inc * controls[k].signum()).max(-0.5).min(0.5);
                         // is that okay?
                         let (new_min_ssd, new_ssd_i) = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
