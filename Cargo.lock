@@ -1,9 +1,4 @@
 [[package]]
-name = "cc"
-version = "1.0.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-
-[[package]]
 name = "libc"
 version = "0.2.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17,7 +12,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "rob535_competition"
 version = "0.1.0"
 dependencies = [
- "cc 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustplotlib 0.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.40 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -58,7 +52,6 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [metadata]
-"checksum cc 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)" = "f159dfd43363c4d08055a07703eb7a3406b0dac4d0584d96965a3262db3c9d16"
 "checksum libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)" = "2d2857ec59fadc0773853c664d2d18e7198e83883e7060b63c924cb077bd5c74"
 "checksum redox_syscall 0.1.40 (registry+https://github.com/rust-lang/crates.io-index)" = "c214e91d3ecf43e9a4e41e578973adeb14b474f2bee858742d127af75a0112b1"
 "checksum rustplotlib 0.0.4 (registry+https://github.com/rust-lang/crates.io-index)" = "4326f7ac67e4ff419282ad12dabf1fcad09481a849b72108c890e01414ebb88a"

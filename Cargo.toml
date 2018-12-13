@@ -2,7 +2,6 @@
 name = "rob535_competition"
 version = "0.1.0"
 authors = ["Acshi Haggenmiller <acshikh@umich.edu>"]
-build = "build.rs"
 edition = "2018"
 
 [dependencies]
@@ -18,9 +17,6 @@ crate-type=["staticlib"]
 [[bin]]
 name = "rob535_competition"
 path = "src/main.rs"
-
-[build-dependencies]
-cc = "1.0"
 
 [profile.release]
 debug = true
