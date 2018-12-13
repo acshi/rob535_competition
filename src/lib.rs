@@ -13,7 +13,9 @@ use time::precise_time_s;
 
 extern crate argmin;
 use argmin::prelude::*;
-use argmin::solver::conjugategradient::NonlinearConjugateGradient;
+// use argmin::solver::conjugategradient::NonlinearConjugateGradient;
+// use argmin::solver::linesearch::BacktrackingLineSearch;
+use argmin::solver::gradientdescent::SteepestDescent;
 
 // x_out can either be the same length as x0, or n_steps times that length
 fn rk4_integrate<F>(h: f64, n_steps: usize, f: &mut F, x0: &[f64], x_out: &mut [f64])
@@ -535,7 +537,10 @@ struct LocalRefinementProblem<'a> {
     track_i: usize,
     window: usize,
     dt: f64,
-    x0: &'a [f64]
+    x0: &'a [f64],
+    const_controls: &'a [f64],
+    opt_deltas: bool,
+    opt_fxs: bool
 }
 
 impl<'a> ArgminOperator for LocalRefinementProblem<'a> {
@@ -544,34 +549,263 @@ impl<'a> ArgminOperator for LocalRefinementProblem<'a> {
     type Hessian = ();
 
     fn apply(&self, p: &Vec<f64>) -> Result<f64, Error> {
-        Ok(shooting_obj(self.tp, self.track_i, self.window, self.dt, self.x0,
-                        &p[0..self.window], &p[self.window..self.window*2]))
+        // we will try to enforce control constraints by giving a quadratic penalty to out-of-bounds values
+        // and then clamping them for full evaluation
+        let n_steps = if self.opt_deltas && self.opt_fxs { p.len() / 2 } else { p.len() };
+        let mut clamp_penalty = 0.0;
+        let mut clamped_p = p.to_vec();
+        for k in 0..n_steps {
+            if self.opt_deltas && self.opt_fxs {
+                clamped_p[k] = p[k].max(-0.5).min(0.5);
+                clamp_penalty += (p[k] - clamped_p[k]).powi(2);
+                clamped_p[n_steps + k] = (p[n_steps + k] * 1000.0).max(-5000.0).min(2500.0);
+                clamp_penalty += ((p[n_steps + k] * 1000.0) - clamped_p[n_steps + k]).powi(2);
+            } else if self.opt_deltas {
+                clamped_p[k] = p[k].max(-0.5).min(0.5);
+                clamp_penalty += (p[k] - clamped_p[k]).powi(2);
+            } else if self.opt_fxs {
+                clamped_p[k] = (p[k] * 1000.0).max(-5000.0).min(2500.0);
+                clamp_penalty += ((p[k] * 1000.0) - clamped_p[k]).powi(2);
+            }
+        }
+
+        let (base_obj, _) = if self.opt_deltas && self.opt_fxs {
+            refinement_obj(self.tp, self.track_i, self.dt, self.x0,
+                           &clamped_p[0..n_steps], &clamped_p[n_steps..n_steps*2], None)
+        } else if self.opt_deltas {
+            refinement_obj(self.tp, self.track_i, self.dt, self.x0,
+                           &clamped_p, &self.const_controls, None)
+        } else if self.opt_fxs {
+            refinement_obj(self.tp, self.track_i, self.dt, self.x0,
+                           &self.const_controls, &clamped_p, None)
+        } else {
+            panic!("must opt either deltas or fxs");
+        };
+
+        let total_penalty = base_obj + clamp_penalty;
+        // if !total_penalty.is_finite() {
+        //     // panic!("cost not finite: {}, ran with {:?} from {:?}", total_penalty, clamped_p, p);
+        //     return Ok(1e20);
+        // }
+
+        Ok(total_penalty)
     }
+
+    fn gradient(&self, p: &Vec<f64>) -> Result<Vec<f64>, Error> {
+        let n = p.len();
+
+        let y0 = self.apply(p)?;
+
+        let mut gradients = vec![0.0; n];
+        let delta = f64::EPSILON.sqrt();
+
+        let mut p_mut = vec![0.0; n];
+        for i in 0..n {
+            p_mut.copy_from_slice(&p);
+            let diff = p[i] * delta + delta;
+            // if p[i] >= 2499.0 {
+            //     diff = -diff;
+            // }
+            // let diff = if i < n/2 { 1e-4 } else { 100.0 };
+            // p_mut[i] -= diff;
+            // let y2 = self.apply(&p_mut)?;
+            // p_mut[i] += 2.0 * diff;
+            p_mut[i] += diff;
+            let y1 = self.apply(&p_mut)?;
+
+            // gradients[i] = (y2 - y1) / (2.0 * diff);
+            gradients[i] = (y1 - y0) / diff;
+
+            // if gradients[i] == 0.0 || !gradients[i].is_finite() {
+            // if !gradients[i].is_finite() {
+            //     panic!("Bad gradient for {}: {} from y1 {} y0 {} diff {} p {:?}", i, gradients[i], y1, y0, diff, p);
+            // }
+        }
+
+        // println!("Gradients: {:?}", gradients);
+        Ok(gradients)
+    }
+}
+
+fn refinement_obj(tp: &TrackProblem, old_track_i: usize, dt: f64, x0: &[f64], deltas: &[f64], fxs: &[f64], collides_out: Option<&mut bool>) -> (f64, usize) {
+    let n = x0.len();
+    let track_n = tp.thetas.len();
+    let ref_x = &tp.cline[0..track_n];
+    let ref_y = &tp.cline[track_n..track_n*2];
+    let mut track_i = next_track_idx(old_track_i, ref_x, ref_y, x0[0], x0[2]);
+
+    let mut obj_val = 0.0;
+
+    let mut old_xs = x0.to_vec();
+    let mut new_xs = vec![0.0; n];
+
+    let mut has_collision = false;
+
+    for k in 0..deltas.len() {
+        let mut integrate_fun = |_t: f64, x: &[f64], dx: &mut[f64]| {
+            bike_fun(x, deltas[k], fxs[k], dx);
+        };
+        rk4_integrate(dt / 4.0, 4, &mut integrate_fun, &old_xs, &mut new_xs);
+        old_xs.copy_from_slice(&new_xs);
+
+        // control input penalties
+        // obj_val += deltas[k].powi(2);
+        // obj_val += 1e-9 * fxs[k].powi(2);
+        // // sideways velocity penalty
+        // obj_val += 1e-2 * new_xs[3].powi(2);
+
+        track_i = next_track_idx(track_i, ref_x, ref_y, new_xs[0], new_xs[2]);
+
+        // distance from centerline
+        // obj_val += 1e-3 * ((new_xs[0] - ref_x[track_i]).powi(2) +
+        //                    (new_xs[2] - ref_y[track_i]).powi(2));
+
+        if collides_out.is_some() {
+            has_collision = has_collision || closest_obj_signed_sq_dist(tp, new_xs[0], new_xs[2]) < 0.0;
+        }
+
+        // let completion = track_i as f64 / (track_n - 1) as f64 * 100.0;
+        // if completion < 95.0 {
+        //     let signed_sq_dist = closest_obj_signed_sq_dist(tp, new_xs[0], new_xs[2]);
+        //     let avoid_dist = 4.0;
+        //     let collision_err = if signed_sq_dist < avoid_dist * avoid_dist {
+        //         let dist = signed_sq_dist.max(0.00001).sqrt();
+        //         10.0 * (1.0 / dist - 1.0 / avoid_dist) / (dist * dist)
+        //     } else {
+        //         0.0
+        //     };
+        //     obj_val += collision_err;
+        // }
+        // obj_val += ((1.0 - (new_xs[1] / 30.0).min(1.0)) * 10.0).powi(3) * discount;
+    }
+    // obj_val -= completion * 20.0;
+    let point_ahead_i = track_i + 100;
+    let (next_x, next_y) = if point_ahead_i < track_n {
+        (ref_x[point_ahead_i], ref_y[point_ahead_i])
+    } else {
+        (101.0 * ref_x[track_n - 1] - 100.0 * ref_x[track_n - 2],
+         101.0 * ref_y[track_n - 1] - 100.0 * ref_y[track_n - 2])
+    };
+
+    let mut total_dist = (new_xs[0] - next_x).powi(2) +
+                         (new_xs[2] - next_y).powi(2);
+    for i in point_ahead_i..track_n-1 {
+        total_dist += (ref_x[i+1] - ref_x[i]).powi(2) +
+                      (ref_y[i+1] - ref_y[i]).powi(2);
+    }
+    obj_val += 1e-3 * total_dist;
+
+    if let Some(collides_out) = collides_out {
+        *collides_out = has_collision;
+    }
+
+    (obj_val, track_i)
 }
 
 fn local_refinement(tp: &TrackProblem, track_i: usize, dt: f64, k: usize, window: usize, xs: &mut [f64], controls: &mut [f64]) {
     let n = 6;
-    let m = 2;
     let n_steps = xs.len() / n;
     let x0 = &mut vec![0.0; n];
     for i in 0..n {
         x0[i] = xs[i * n_steps + k];
     }
 
-    let operator = LocalRefinementProblem { tp, track_i, window, dt, x0 };
-    let mut params = vec![0.0; window * m];
-    for k in 0..window {
-        for i in 0..m {
-            params[i * window + k] = controls[i * n_steps + k];
+    if true {
+        // for both deltas and fxs
+        let operator = LocalRefinementProblem { tp, track_i, window, dt, x0, const_controls: &[], opt_deltas: true, opt_fxs: true };
+        let mut params = vec![0.0; window * 2];
+        for inner_k in 0..window {
+            params[inner_k] = controls[k + inner_k];
+            params[window + inner_k] = controls[n_steps + k + inner_k] / 1000.0;
+        }
+        // let mut solver = NonlinearConjugateGradient::new_prplus(&operator, params).unwrap();
+        let mut solver = SteepestDescent::new(&operator, params).unwrap();
+        // solver.set_linesearch(Box::new(BacktrackingLineSearch::new(&operator)));
+        solver.add_logger(ArgminSlogLogger::term());
+        solver.set_max_iters(2);
+        let run_res = solver.run_fast();
+        if run_res.is_err() {
+            println!("Local refinement failed? Attempting to continue...")
+        }
+        let res = solver.result();
+
+        let mut collides_out = false;
+        let (_, res_track_i) = refinement_obj(tp, track_i, dt, x0, &res.param[0..window], &res.param[window..window*2], Some(&mut collides_out));
+        if res_track_i >= track_i && !collides_out {
+            println!("Keeping refinement improvement from {} to {}", track_i, res_track_i);
+            // println!("{:?}", res);
+            for inner_k in 0..window {
+                controls[k + inner_k] = res.param[inner_k].max(-0.5).min(0.5);
+                controls[n_steps + k + inner_k] = (res.param[window + inner_k] * 1000.0).max(-5000.0).min(2500.0);
+            }
+        } else {
+            println!("Dismissing refinement from {} to {} w/ colliding {}", track_i, res_track_i, collides_out);
         }
     }
 
-    let mut solver = NonlinearConjugateGradient::new_pr(&operator, params).unwrap();
-    solver.set_max_iters(20);
-    solver.set_restart_iters(10);
-    solver.set_restart_orthogonality(0.1);
-    solver.run().unwrap();
-    let _res = solver.result();
+    if false {
+        // for deltas
+        let const_controls = &controls[n_steps+k..n_steps+k+window].to_vec();
+        let operator = LocalRefinementProblem { tp, track_i, window, dt, x0, const_controls, opt_deltas: true, opt_fxs: false };
+        let mut params = vec![0.0; window];
+        for inner_k in 0..window {
+            params[inner_k] = controls[k + inner_k];
+        }
+        // let mut solver = NonlinearConjugateGradient::new_prplus(&operator, params).unwrap();
+        let mut solver = SteepestDescent::new(&operator, params).unwrap();
+        // solver.set_linesearch(Box::new(BacktrackingLineSearch::new(&operator)));
+        solver.add_logger(ArgminSlogLogger::term());
+        solver.set_max_iters(2);
+        let run_res = solver.run_fast();
+        if run_res.is_err() {
+            println!("Local refinement failed? Attempting to continue...")
+        }
+        let res = solver.result();
+        // println!("{:?}", res);
+        for inner_k in 0..window {
+            controls[k + inner_k] = res.param[inner_k].max(-0.5).min(0.5);
+        }
+    }
+
+    if false {
+        // for fxs
+        let const_controls = &controls[k..k+window].to_vec();
+        let operator = LocalRefinementProblem { tp, track_i, window, dt, x0, const_controls, opt_deltas: false, opt_fxs: true };
+        let mut params = vec![0.0; window];
+        for inner_k in 0..window {
+            params[inner_k] = controls[n_steps + k + inner_k] / 1000.0;
+        }
+        // let mut solver = NonlinearConjugateGradient::new(&operator, params).unwrap();
+        let mut solver = SteepestDescent::new(&operator, params).unwrap();
+        solver.add_logger(ArgminSlogLogger::term());
+        solver.set_max_iters(2);
+        let run_res = solver.run_fast();
+        if run_res.is_err() {
+            println!("Local refinement failed? Attempting to continue...")
+        }
+        let res = solver.result();
+        // println!("{:?}", res);
+        for inner_k in 0..window {
+            controls[n_steps + k + inner_k] = (res.param[inner_k] * 1000.0).max(-5000.0).min(2500.0);
+        }
+    }
+
+    // we also update x values
+    let mut old_xs = x0.to_vec();
+    let mut new_xs = vec![0.0; n];
+    for inner_k in k..k+window {
+        for i in 0..n {
+            xs[i * n_steps + inner_k] = old_xs[i];
+        }
+        let mut integrate_fun = |_t: f64, x: &[f64], dx: &mut[f64]| {
+            bike_fun(x, controls[inner_k], controls[n_steps+inner_k], dx);
+        };
+        rk4_integrate(dt / 4.0, 4, &mut integrate_fun, &old_xs, &mut new_xs);
+        old_xs.copy_from_slice(&new_xs);
+    }
+    for i in 0..n {
+        xs[i * n_steps + k + window] = old_xs[i];
+    }
 }
 
 fn shooting_obj(tp: &TrackProblem, old_track_i: usize, horizon: usize, dt: f64, x0: &[f64], deltas: &[f64], fxs: &[f64]) -> f64 {
@@ -746,7 +980,7 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
     let ref_x = &tp.cline[0..track_n];
     let ref_y = &tp.cline[track_n..track_n*2];
 
-    let refinement_window = 50;
+    let refinement_window = 100;
 
     let mut xs = vec![0.0; total_steps * n];
 
@@ -758,7 +992,7 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
     assert!(controls.len() >= total_steps * m);
 
     let start_time = precise_time_s();
-    for solve_i in 0..=4 {
+    for solve_i in 0..=3 {
         let horizon = 51;//if solve_i == 0 { 50 } else { 50 };
         let high_res = false; //solve_i >= 0;
 
@@ -773,9 +1007,14 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
                 xs[i * total_steps + k] = old_xs[i];
             }
 
-            if k >= refinement_window && k % refinement_window / 2 == 0 {
-                // refine last refinement_window steps
-                local_refinement(&tp, track_i, dt, k - refinement_window, refinement_window, &mut xs, controls);
+            if solve_i == 3 {
+                if k >= refinement_window && k % (refinement_window / 2) == 0 {
+                    local_refinement(&tp, track_i, dt, k - refinement_window, refinement_window, &mut xs, controls);
+
+                    for i in 0..n {
+                        old_xs[i] = xs[i * total_steps + k];
+                    }
+                }
             }
 
             let mut deltas = vec![0.0; horizon];
@@ -841,7 +1080,7 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
 
     let mut f = File::create("best_xs.txt").unwrap();
     write!(f, "[").unwrap();
-    for i in 0..best_steps_used+10 {
+    for i in 0..(best_steps_used+2).min(total_steps) {
         for j in 0..n {
             write!(f, "{:.5}, ", best_xs[j * total_steps + i]).unwrap();
         }
@@ -851,7 +1090,7 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
 
     let mut f = File::create("best_us.txt").unwrap();
     write!(f, "[").unwrap();
-    for i in 0..best_steps_used+10 {
+    for i in 0..(best_steps_used+2).min(total_steps) {
         for j in 0..m {
             write!(f, "{:.5}, ", best_controls[j * total_steps + i]).unwrap();
         }
