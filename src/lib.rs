@@ -908,7 +908,7 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
         println!("\nStarting epoch {}", epoch);
 
         for k in (0..n_steps-1).rev() {
-            if min_ssd < 0.26 {
+            if min_ssd < 0.3 {
                 break;
             }
             if k % 50 == 0 {
@@ -1016,7 +1016,7 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
         // look for steering pairs (opposite signs close together)
         if !changes_made || epoch % 4 == 0 {
             for diff in 1..40 {
-                if min_ssd < 0.26 {
+                if min_ssd < 0.3 {
                     break;
                 }
                 println!("Steering diff: {}", diff);
@@ -1050,7 +1050,7 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
         // look for accel pairs (opposite signs close together)
         if !changes_made || epoch % 4 == 0 {
             for diff in 1..40 {
-                if min_ssd < 0.26 {
+                if min_ssd < 0.3 {
                     break;
                 }
                 println!("Accel diff: {}", diff);
