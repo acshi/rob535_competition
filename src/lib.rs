@@ -11,10 +11,6 @@ use rustplotlib::backend::Matplotlib;
 extern crate time;
 use time::precise_time_s;
 
-extern crate argmin;
-use argmin::prelude::*;
-use argmin::solver::conjugategradient::NonlinearConjugateGradient;
-
 // x_out can either be the same length as x0, or n_steps times that length
 fn rk4_integrate<F>(h: f64, n_steps: usize, f: &mut F, x0: &[f64], x_out: &mut [f64])
 where F: FnMut(f64, &[f64], &mut [f64]) {
@@ -65,7 +61,7 @@ where F: FnMut(f64, &[f64], &mut [f64]) {
 }
 
 #[allow(dead_code)]
-fn forward_integrate_bike(controls: &[f64]) -> Vec<f64> {
+fn forward_integrate_bike(rk4_div: usize, controls: &[f64]) -> Vec<f64> {
     let n = 6;
     let m = 2;
     let n_steps = controls.len() / m;
@@ -92,7 +88,7 @@ fn forward_integrate_bike(controls: &[f64]) -> Vec<f64> {
         let mut ode_fun = |_t: f64, x: &[f64], dx: &mut [f64]| {
             bike_fun(x, controls[k], controls[k + n_steps], dx);
         };
-        rk4_integrate(dt / 4.0, 4, &mut ode_fun, &old_xs, &mut new_xs);
+        rk4_integrate(dt / rk4_div as f64, rk4_div, &mut ode_fun, &old_xs, &mut new_xs);
         old_xs.copy_from_slice(&new_xs);
     }
     for i in 0..n {
@@ -529,52 +525,7 @@ fn closest_obj_signed_sq_dist(tp: &TrackProblem, x: f64, y: f64) -> f64 {
     min_dist_sq * cross.signum()
 }
 
-#[derive(Clone)]
-struct LocalRefinementProblem<'a> {
-    tp: &'a TrackProblem,
-    track_i: usize,
-    window: usize,
-    dt: f64,
-    x0: &'a [f64]
-}
-
-impl<'a> ArgminOperator for LocalRefinementProblem<'a> {
-    type Parameters = Vec<f64>;
-    type OperatorOutput = f64;
-    type Hessian = ();
-
-    fn apply(&self, p: &Vec<f64>) -> Result<f64, Error> {
-        Ok(shooting_obj(self.tp, self.track_i, self.window, self.dt, self.x0,
-                        &p[0..self.window], &p[self.window..self.window*2]))
-    }
-}
-
-fn local_refinement(tp: &TrackProblem, track_i: usize, dt: f64, k: usize, window: usize, xs: &mut [f64], controls: &mut [f64]) {
-    let n = 6;
-    let m = 2;
-    let n_steps = xs.len() / n;
-    let x0 = &mut vec![0.0; n];
-    for i in 0..n {
-        x0[i] = xs[i * n_steps + k];
-    }
-
-    let operator = LocalRefinementProblem { tp, track_i, window, dt, x0 };
-    let mut params = vec![0.0; window * m];
-    for k in 0..window {
-        for i in 0..m {
-            params[i * window + k] = controls[i * n_steps + k];
-        }
-    }
-
-    let mut solver = NonlinearConjugateGradient::new_pr(&operator, params).unwrap();
-    solver.set_max_iters(20);
-    solver.set_restart_iters(10);
-    solver.set_restart_orthogonality(0.1);
-    solver.run().unwrap();
-    let _res = solver.result();
-}
-
-fn shooting_obj(tp: &TrackProblem, old_track_i: usize, horizon: usize, dt: f64, x0: &[f64], deltas: &[f64], fxs: &[f64]) -> f64 {
+fn shooting_obj(tp: &TrackProblem, old_track_i: usize, horizon: usize, dt: f64, rk4_div: usize, x0: &[f64], deltas: &[f64], fxs: &[f64]) -> f64 {
     let n = x0.len();
     let track_n = tp.thetas.len();
     let ref_x = &tp.cline[0..track_n];
@@ -593,7 +544,7 @@ fn shooting_obj(tp: &TrackProblem, old_track_i: usize, horizon: usize, dt: f64, 
         let mut integrate_fun = |_t: f64, x: &[f64], dx: &mut[f64]| {
             bike_fun(x, deltas[k], fxs[k], dx);
         };
-        rk4_integrate(dt / 4.0, 4, &mut integrate_fun, &old_xs, &mut new_xs);
+        rk4_integrate(dt / rk4_div as f64, rk4_div, &mut integrate_fun, &old_xs, &mut new_xs);
         old_xs.copy_from_slice(&new_xs);
 
         track_i = next_track_idx(track_i, ref_x, ref_y, new_xs[0], new_xs[2]);
@@ -631,7 +582,7 @@ fn shooting_obj(tp: &TrackProblem, old_track_i: usize, horizon: usize, dt: f64, 
     obj_val
 }
 
-fn shooting_best_delta(tp: &TrackProblem, track_i: usize, horizon: usize, high_res: bool, dt: f64, k: usize, x0: &[f64], deltas: &mut [f64], fxs: &[f64]) -> f64 {
+fn shooting_best_delta(tp: &TrackProblem, track_i: usize, horizon: usize, high_res: bool, dt: f64, rk4_div: usize, k: usize, x0: &[f64], deltas: &mut [f64], fxs: &[f64]) -> f64 {
     let mut min_obj = f64::MAX;
     let mut min_delta = 0.0;
 
@@ -645,7 +596,7 @@ fn shooting_best_delta(tp: &TrackProblem, track_i: usize, horizon: usize, high_r
     // for &delta in [-0.5, -0.25, 0.0, 0.25, 0.5].iter() {
         deltas[k] = delta;
         // println!("delta: {}", delta);
-        let obj = shooting_obj(tp, track_i, horizon, dt, x0, deltas, fxs);
+        let obj = shooting_obj(tp, track_i, horizon, dt, rk4_div, x0, deltas, fxs);
         if obj < min_obj {
             min_obj = obj;
             min_delta = delta;
@@ -655,7 +606,7 @@ fn shooting_best_delta(tp: &TrackProblem, track_i: usize, horizon: usize, high_r
     min_delta
 }
 
-fn shooting_best_fx(tp: &TrackProblem, track_i: usize, horizon: usize, high_res: bool, dt: f64, k: usize, x0: &[f64], deltas: &[f64], fxs: &mut [f64]) -> f64 {
+fn shooting_best_fx(tp: &TrackProblem, track_i: usize, horizon: usize, high_res: bool, dt: f64, rk4_div: usize, k: usize, x0: &[f64], deltas: &[f64], fxs: &mut [f64]) -> f64 {
     let mut min_obj = f64::MAX;
     let mut min_fx = 0.0;
 
@@ -668,7 +619,7 @@ fn shooting_best_fx(tp: &TrackProblem, track_i: usize, horizon: usize, high_res:
     for &fx in iter_vals.iter() {
     // for &fx in [-5000.0, -2500.0, 0.0, 1250.0, 2500.0].iter() {
         fxs[k] = fx;
-        let obj = shooting_obj(tp, track_i, horizon, dt, x0, deltas, fxs);
+        let obj = shooting_obj(tp, track_i, horizon, dt, rk4_div, x0, deltas, fxs);
         if obj < min_obj {
             min_obj = obj;
             min_fx = fx;
@@ -678,7 +629,7 @@ fn shooting_best_fx(tp: &TrackProblem, track_i: usize, horizon: usize, high_res:
     min_fx
 }
 
-fn shooting_step(tp: &TrackProblem, old_track_i: usize, horizon: usize, high_res: bool, dt: f64, x0: &[f64],
+fn shooting_step(tp: &TrackProblem, old_track_i: usize, horizon: usize, high_res: bool, dt: f64, rk4_div: usize, x0: &[f64],
                  ref_deltas: &[f64], ref_fxs: &[f64], x_new: &mut [f64], u_new: &mut [f64]) {
     let n = x0.len();
 
@@ -708,14 +659,14 @@ fn shooting_step(tp: &TrackProblem, old_track_i: usize, horizon: usize, high_res
         }
         track_i = next_track_idx(track_i, ref_x, ref_y, old_xs[0], old_xs[2]);
 
-        deltas[k] = shooting_best_delta(tp, track_i, horizon, high_res, dt, k, &old_xs, &mut deltas, &fxs);
-        fxs[k] = shooting_best_fx(tp, track_i, horizon, high_res, dt, k, &old_xs, &deltas, &mut fxs);
+        deltas[k] = shooting_best_delta(tp, track_i, horizon, high_res, dt, rk4_div, k, &old_xs, &mut deltas, &fxs);
+        fxs[k] = shooting_best_fx(tp, track_i, horizon, high_res, dt, rk4_div, k, &old_xs, &deltas, &mut fxs);
 
         // pass through "real world" model to get our next state
         let mut integrate_fun = |_t: f64, x: &[f64], dx: &mut[f64]| {
             bike_fun(x, deltas[k], fxs[k], dx);
         };
-        rk4_integrate(dt / 4.0, 4, &mut integrate_fun, &old_xs, &mut new_xs);
+        rk4_integrate(dt / rk4_div as f64, rk4_div, &mut integrate_fun, &old_xs, &mut new_xs);
         old_xs.copy_from_slice(&new_xs);
     }
     for i in 0..n {
@@ -739,6 +690,7 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
     let n = 6;
     let m = 2;
     let dt = 0.05;
+    let rk4_div = 4;
     let ref_steps = tp.thetas.len();
     let total_steps = ref_steps * 20;
     let tp = resample_track(&tp, total_steps);
@@ -758,7 +710,7 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
     assert!(controls.len() >= total_steps * m);
 
     let start_time = precise_time_s();
-    for solve_i in 0..=4 {
+    for solve_i in 0..=3 {
         let horizon = 51;//if solve_i == 0 { 50 } else { 50 };
         let high_res = false; //solve_i >= 0;
 
@@ -773,9 +725,8 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
                 xs[i * total_steps + k] = old_xs[i];
             }
 
-            if k >= refinement_window && k % refinement_window / 2 == 0 {
-                // refine last refinement_window steps
-                local_refinement(&tp, track_i, dt, k - refinement_window, refinement_window, &mut xs, controls);
+            if solve_i == 3 && k >= refinement_window && k % refinement_window / 2 == 0 {
+                // local_refinement(&tp, track_i, dt, k - refinement_window, refinement_window, &mut xs, controls);
             }
 
             let mut deltas = vec![0.0; horizon];
@@ -784,7 +735,7 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
                 deltas.copy_from_slice(&controls[k..k+horizon]);
                 fxs.copy_from_slice(&controls[k+total_steps..k+total_steps+horizon]);
             }
-            shooting_step(&tp, track_i, horizon, high_res, dt, &old_xs, &deltas, &fxs, &mut new_xs, &mut new_us);
+            shooting_step(&tp, track_i, horizon, high_res, dt, rk4_div, &old_xs, &deltas, &fxs, &mut new_xs, &mut new_us);
             controls[k] = new_us[0];
             controls[k + total_steps] = new_us[1];
 
@@ -862,7 +813,7 @@ fn shooting_solve(tp: TrackProblem, controls: &mut [f64]) -> usize {
     plot_trajectory(&tp, total_steps, &best_xs);
 
     if false {
-        let x_all = forward_integrate_bike(&best_controls);
+        let x_all = forward_integrate_bike(rk4_div, &best_controls);
         // plot_trajectory(&tp, total_steps, &x_all);
         trajectory_stays_on_track(&x_all);
     }
@@ -876,7 +827,7 @@ fn load_track_problem() -> TrackProblem {
     TrackProblem { bl, br, cline, thetas, obs_p0x, obs_p0y, obs_len, obs_dirx, obs_diry }
 }
 
-fn integrate_for_collision(tp: &TrackProblem, steps_used: usize, controls: &[f64], x_end: &mut [f64]) -> f64 {
+fn integrate_for_collision(tp: &TrackProblem, steps_used: usize, rk4_div: usize, controls: &[f64], x_end: &mut [f64]) -> f64 {
     let n = 6;
     let m = 2;
     let n_steps = controls.len() / m;
@@ -892,7 +843,7 @@ fn integrate_for_collision(tp: &TrackProblem, steps_used: usize, controls: &[f64
         let mut ode_fun = |_t: f64, x: &[f64], dx: &mut [f64]| {
             bike_fun(x, controls[k], controls[k + n_steps], dx);
         };
-        rk4_integrate(dt / 4.0, 4, &mut ode_fun, &old_xs, &mut new_xs);
+        rk4_integrate(dt / rk4_div as f64, rk4_div, &mut ode_fun, &old_xs, &mut new_xs);
         old_xs.copy_from_slice(&new_xs);
 
         let ssd = closest_obj_signed_sq_dist(&tp, new_xs[0], new_xs[2]);
@@ -913,6 +864,9 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
     // for example, can we find braking or turning that isn't necessary and eliminate it?
     // can we find a time step to eliminate entirely?
 
+    // we want our own mutable copy
+    let mut ref_controls = ref_controls.to_vec();
+
     // or... let's try working backwards, maintaining forward success!
     let ref_steps = tp.thetas.len();
     let total_steps = ref_steps * 20;
@@ -921,69 +875,210 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
     let ref_x = &tp.cline[0..track_n];
     let ref_y = &tp.cline[track_n..track_n*2];
     let dt = 0.05;
+    let rk4_div = 4;
 
+    let n = 6;
     let m = 2;
     let n_steps = ref_controls.len() / m;
-    let mut steps_used = n_steps;
-    let mut x_end = vec![0.0; 6];
-    let min_sign_sq_dist = integrate_for_collision(&tp, steps_used, ref_controls, &mut x_end);
+    let steps_used = n_steps;
+    let mut x_end = vec![0.0; n];
+    let mut x_end_check = vec![0.0; n];
+    let min_sign_sq_dist = integrate_for_collision(&tp, steps_used, rk4_div, &ref_controls, &mut x_end);
     println!("Start min sign sq dist: {:.2}", min_sign_sq_dist);
 
     let mut controls = ref_controls.to_vec();
 
     let mut track_i = track_n - 1;
 
-    for epoch in 0..=0 {
-        println!("Starting epoch {}", epoch);
-        for k in (0..n_steps-1).rev() {
-            // try to zero out braking
-            if controls[n_steps + k] < 0.0 {
-                controls[n_steps + k] = 0.0;
-                // is that okay?
-                let min_ssd = integrate_for_collision(&tp, steps_used, &controls, &mut x_end);
-                if min_ssd > 0.2 {
-                    println!("keeping brake to 0 change: {:.2}", min_ssd);
+    let mut changes_made = true;
+    let mut epoch = 0;
+    let mut min_ssd = min_sign_sq_dist;
+    while changes_made {
+        changes_made = false;
 
-                    track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
-                    let completion = track_i as f64 / (track_n - 1) as f64 * 100.0;
-                    if completion >= 100.0 {
-                        println!("track already complete ({:.2}, {:.2}); removing last point(s)!", x_end[0], x_end[2]);
-                        steps_used -= 1;
+        println!("\nStarting epoch {}", epoch);
+
+        for k in (0..n_steps-1).rev() {
+            if k % 50 == 0 {
+                println!("K: {}", k);
+            }
+
+            // try to increase acceleration
+            for inc in [2500.0, 500.0, 100.0].iter() {
+                while controls[n_steps + k] < 2500.0 {
+                    controls[n_steps + k] = (controls[n_steps + k] + inc).min(2500.0);
+
+                    // is that okay?
+                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                    let okay1 = new_min_ssd > 0.25 && new_min_ssd >= min_ssd - 0.05;
+                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
+                    if okay1 && check_min_ssd > 0.25 {
+                        changes_made = true;
+                        min_ssd = new_min_ssd;
+                        ref_controls[n_steps + k] = controls[n_steps + k];
+                        println!("accel to {:.0}: {:.2}, {:.2}", controls[n_steps + k], min_ssd, check_min_ssd);
+
+                        track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
+                        // let completion = track_i as f64 / (track_n - 1) as f64 * 100.0;
+                        // if completion >= 100.0 {
+                        //     println!("track already complete ({:.2}, {:.2}); removing last point(s)!", x_end[0], x_end[2]);
+                        //     steps_used -= 1;
+                        // }
+                    } else {
+                        controls[n_steps + k] = ref_controls[n_steps + k];
+                        break;
                     }
-                } else {
-                    controls[n_steps + k] = ref_controls[n_steps + k];
                 }
             }
 
-            // try to zero out steering
-            if controls[k] != 0.0 {
-                controls[k] = 0.0;
-                // is that okay?
-                let min_ssd = integrate_for_collision(&tp, steps_used, &controls, &mut x_end);
-                if min_ssd > 0.2 {
-                    println!("keeping steering to 0 change: {:.2}", min_ssd);
-
-                    track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
-                    let completion = track_i as f64 / (track_n - 1) as f64 * 100.0;
-                    if completion >= 100.0 {
-                        println!("track already complete ({:.2}, {:.2}); removing last point(s)!", x_end[0], x_end[2]);
-                        steps_used -= 1;
+            // try to reduce steering
+            for inc in [0.5f64, 0.1, 0.025].iter() {
+                while controls[k] != 0.0 {
+                    controls[k] -= inc.min(controls[k].abs()) * controls[k].signum();
+                    if controls[k].abs() < 0.025 {
+                        controls[k] = 0.0;
                     }
-                } else {
-                    controls[k] = ref_controls[k];
+                    // is that okay?
+                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                    let okay1 = new_min_ssd > 0.25 && new_min_ssd >= min_ssd - 0.01;
+                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
+                    if okay1 && check_min_ssd > 0.25 {
+                        changes_made = true;
+                        min_ssd = new_min_ssd;
+                        println!("steering reduced from {:.2} to {:.2}: {:.2}, {:.2}", ref_controls[k], controls[k], min_ssd, check_min_ssd);
+                        ref_controls[k] = controls[k];
+
+                        track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
+                        // let completion = track_i as f64 / (track_n - 1) as f64 * 100.0;
+                        // if completion >= 100.0 {
+                        //     println!("track already complete ({:.2}, {:.2}); removing last point(s)!", x_end[0], x_end[2]);
+                        //     steps_used -= 1;
+                        // }
+                    } else {
+                        controls[k] = ref_controls[k];
+                        break;
+                    }
                 }
             }
         }
+
+        for k in (0..n_steps-1).rev() {
+            if k % 50 == 0 {
+                println!("Steer k: {}", k);
+            }
+
+            // try to increase steering for better clearance
+            for inc in [0.5, 0.1, 0.025].iter() {
+                while controls[k] != 0.0 && controls[k].abs() < 0.5 && min_ssd < 0.5 {
+                    controls[k] = (controls[k] + inc * controls[k].signum()).max(-0.5).min(0.5);
+                    // is that okay?
+                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                    let okay1 = new_min_ssd >= min_ssd + 0.02;
+                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
+                    if okay1 && check_min_ssd > 0.25 {
+                        changes_made = true;
+                        min_ssd = new_min_ssd;
+                        println!("steering increased for clearance from {:.2} to {:.2}: {:.2}, {:.2}", ref_controls[k], controls[k], min_ssd, check_min_ssd);
+                        ref_controls[k] = controls[k];
+
+                        track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
+                        // let completion = track_i as f64 / (track_n - 1) as f64 * 100.0;
+                        // if completion >= 100.0 {
+                        //     println!("track already complete ({:.2}, {:.2}); removing last point(s)!", x_end[0], x_end[2]);
+                        //     steps_used -= 1;
+                        // }
+                    } else {
+                        controls[k] = ref_controls[k];
+                        break;
+                    }
+                }
+            }
+        }
+
+        // look for steering pairs (opposite signs close together)
+        for diff in 1..40 {
+            println!("Steering diff: {}", diff);
+            for k in 0..n_steps-1-diff {
+                let v1 = controls[k];
+                let v2 = controls[k + diff];
+                if v1 != 0.0 && v1 * v2 < 0.0 {
+                    let remove_amount = v1.abs().min(v2.abs());
+                    controls[k] -= remove_amount * v1.signum();
+                    controls[k + diff] -= remove_amount * v2.signum();
+                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                    let okay1 = new_min_ssd > 0.25;
+                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
+                    if okay1 && check_min_ssd > 0.25 {
+                        changes_made = true;
+                        min_ssd = new_min_ssd;
+                        ref_controls[k] = controls[k];
+                        ref_controls[k + diff] = controls[k + diff];
+                        println!("steering pair {} apart at k {} ({:.2}, {:.2}) reduced: {:.2}, {:.2}", diff, k, v1, v2, min_ssd, check_min_ssd);
+                        track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
+                    } else {
+                        controls[k] = ref_controls[k];
+                        controls[k + diff] = ref_controls[k + diff];
+                    }
+                }
+            }
+        }
+
+        // look for accel pairs (opposite signs close together)
+        for diff in 1..40 {
+            println!("Accel diff: {}", diff);
+            for k in 0..n_steps-1-diff {
+                let v1 = controls[n_steps + k];
+                let v2 = controls[n_steps + k + diff];
+                if v1 != 0.0 && v1 * v2 < 0.0 {
+                    let remove_amount = v1.abs().min(v2.abs());
+                    controls[n_steps + k] -= remove_amount * v1.signum();
+                    controls[n_steps + k + diff] -= remove_amount * v2.signum();
+                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                    let okay1 = new_min_ssd > 0.25;
+                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
+                    if okay1 && check_min_ssd > 0.25 {
+                        changes_made = true;
+                        min_ssd = new_min_ssd;
+                        ref_controls[n_steps + k] = controls[n_steps + k];
+                        ref_controls[n_steps + k + diff] = controls[n_steps + k + diff];
+                        println!("accel pair {} apart at k {} ({:.2}, {:.2}) reduced: {:.2}, {:.2}", diff, k, v1, v2, min_ssd, check_min_ssd);
+                        track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
+                    } else {
+                        controls[n_steps + k] = ref_controls[n_steps + k];
+                        controls[n_steps + k + diff] = ref_controls[n_steps + k + diff];
+                    }
+                }
+            }
+        }
+
+        epoch += 1;
     }
 
     println!("total trajectory time: {:.2} seconds", steps_used as f64 * dt);
 
-    let mut best_controls = vec![0.0; steps_used * m];
-    best_controls[0..steps_used].copy_from_slice(&controls[0..steps_used]);
-    best_controls[steps_used..steps_used*2].copy_from_slice(&controls[n_steps..n_steps+steps_used]);
+    let xs = forward_integrate_bike(rk4_div, &controls);
 
-    let best_xs = forward_integrate_bike(&best_controls);
-    plot_trajectory(&tp, steps_used, &best_xs);
+    let mut f = File::create("refined_xs.txt").unwrap();
+    write!(f, "[").unwrap();
+    for i in 0..steps_used {
+        for j in 0..n {
+            write!(f, "{:.5}, ", xs[j * n_steps + i]).unwrap();
+        }
+        write!(f, "; ").unwrap();
+    }
+    writeln!(f, "];").unwrap();
+
+    let mut f = File::create("refined_us.txt").unwrap();
+    write!(f, "[").unwrap();
+    for i in 0..steps_used {
+        for j in 0..m {
+            write!(f, "{:.5}, ", controls[j * n_steps + i]).unwrap();
+        }
+        write!(f, "; ").unwrap();
+    }
+    writeln!(f, "];").unwrap();
+
+    plot_trajectory(&tp, steps_used, &xs);
 }
 
 pub fn run_refine_solution() {

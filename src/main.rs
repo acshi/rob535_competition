@@ -1,16 +1,15 @@
 extern crate rustplotlib;
 extern crate time;
-extern crate argmin;
 
 mod lib;
 pub use crate::lib::solve_obstacle_problem;
 use crate::lib::*;
 
 fn main() {
-    if true {
+    if false {
         run_problem1();
     }
-    if false {
+    if true {
         run_refine_solution();
     }
 }

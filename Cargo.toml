@@ -9,7 +9,6 @@ edition = "2018"
 libc = "0.2.45"
 rustplotlib = "0.0.4"
 time = "*"
-argmin = "0.1.6"
 
 [lib]
 name="rob535_competition"
