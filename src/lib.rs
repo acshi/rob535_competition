@@ -976,38 +976,44 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
             }
         }
 
-        for k in (0..min_ssd_i).rev() {
-            if k % 50 == 0 {
-                println!("Steer k: {}", k);
-            }
-            if min_ssd > 0.5 {
-                break;
-            }
+        while min_ssd < 0.5 {
+            'outer: for k in (0..min_ssd_i).rev() {
+                if k % 50 == 0 {
+                    println!("Steer k: {}", k);
+                }
+                if min_ssd > 0.5 {
+                    break;
+                }
 
-            // try to increase steering for better clearance
-            for inc in [0.5, 0.1, 0.025].iter() {
-                while controls[k] != 0.0 && controls[k].abs() < 0.5 && min_ssd < 0.5 {
-                    controls[k] = (controls[k] + inc * controls[k].signum()).max(-0.5).min(0.5);
-                    // is that okay?
-                    let (new_min_ssd, new_ssd_i) = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
-                    let okay1 = new_min_ssd >= min_ssd + 0.02;
-                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check).0 };
-                    if okay1 && check_min_ssd > 0.25 {
-                        changes_made = true;
-                        min_ssd = new_min_ssd;
-                        min_ssd_i = new_ssd_i;
-                        println!("steering increased for clearance from {:.2} to {:.2}: {:.2}, {:.2}, {}", ref_controls[k], controls[k], min_ssd, check_min_ssd, min_ssd_i);
-                        ref_controls[k] = controls[k];
+                // try to increase steering for better clearance
+                for inc in [0.5, 0.1, 0.025].iter() {
+                    while controls[k] != 0.0 && controls[k].abs() < 0.5 && min_ssd < 0.5 {
+                        controls[k] = (controls[k] + inc * controls[k].signum()).max(-0.5).min(0.5);
+                        // is that okay?
+                        let (new_min_ssd, new_ssd_i) = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                        let okay1 = new_min_ssd >= min_ssd + 0.01;
+                        let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check).0 };
+                        if okay1 && check_min_ssd > 0.25 {
+                            changes_made = true;
+                            min_ssd = new_min_ssd;
+                            let different_ssd_i = min_ssd_i != new_ssd_i;
+                            min_ssd_i = new_ssd_i;
+                            println!("steering increased for clearance from {:.2} to {:.2}: {:.2}, {:.2}, {}", ref_controls[k], controls[k], min_ssd, check_min_ssd, min_ssd_i);
+                            ref_controls[k] = controls[k];
 
-                        track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
-                        // let completion = track_i as f64 / (track_n - 1) as f64 * 100.0;
-                        // if completion >= 100.0 {
-                        //     println!("track already complete ({:.2}, {:.2}); removing last point(s)!", x_end[0], x_end[2]);
-                        //     steps_used -= 1;
-                        // }
-                    } else {
-                        controls[k] = ref_controls[k];
-                        break;
+                            track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
+                            // let completion = track_i as f64 / (track_n - 1) as f64 * 100.0;
+                            // if completion >= 100.0 {
+                            //     println!("track already complete ({:.2}, {:.2}); removing last point(s)!", x_end[0], x_end[2]);
+                            //     steps_used -= 1;
+                            // }
+                            if different_ssd_i {
+                                break 'outer;
+                            }
+                        } else {
+                            controls[k] = ref_controls[k];
+                            break;
+                        }
                     }
                 }
             }
