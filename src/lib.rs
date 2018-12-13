@@ -1126,8 +1126,8 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
         // measure time to completion
         for k in 0..steps_used {
             track_i = next_track_idx(track_i, ref_x, ref_y, xs[k], xs[n_steps*2 + k]);
-            if track_i >= track_n {
-                steps_used = (track_i + 4).min(track_n);
+            if track_i >= track_n - 1 {
+                steps_used = (k + 4).min(n_steps);
                 println!("completed track in {:.2} seconds", k as f64 * dt);
                 break;
             }
