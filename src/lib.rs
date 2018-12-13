@@ -507,6 +507,9 @@ fn closest_obj_signed_sq_dist(tp: &TrackProblem, x: f64, y: f64) -> f64 {
     let mut min_i = 0;
     for i in 0..tp.obs_p0x.len() {
         let (p0x, p0y) = (tp.obs_p0x[i], tp.obs_p0y[i]);
+        if (p0x - x).abs() > 10.0 || (p0y - y).abs() > 10.0 {
+            continue;
+        }
         let (dirx, diry) = (tp.obs_dirx[i], tp.obs_diry[i]);
         // s is the distance from p0, along the line direction,
         // to the point that is closest to x, y
@@ -518,6 +521,9 @@ fn closest_obj_signed_sq_dist(tp: &TrackProblem, x: f64, y: f64) -> f64 {
             min_dist_sq = d_sq;
             min_i = i;
         }
+    }
+    if min_dist_sq >= 1e10 {
+        return 1e10;
     }
     let (p0x, p0y) = (tp.obs_p0x[min_i], tp.obs_p0y[min_i]);
     let (dirx, diry) = (tp.obs_dirx[min_i], tp.obs_diry[min_i]);
@@ -827,7 +833,7 @@ fn load_track_problem() -> TrackProblem {
     TrackProblem { bl, br, cline, thetas, obs_p0x, obs_p0y, obs_len, obs_dirx, obs_diry }
 }
 
-fn integrate_for_collision(tp: &TrackProblem, steps_used: usize, rk4_div: usize, controls: &[f64], x_end: &mut [f64]) -> f64 {
+fn integrate_for_collision(tp: &TrackProblem, steps_used: usize, rk4_div: usize, controls: &[f64], x_end: &mut [f64]) -> (f64, usize) {
     let n = 6;
     let m = 2;
     let n_steps = controls.len() / m;
@@ -838,6 +844,7 @@ fn integrate_for_collision(tp: &TrackProblem, steps_used: usize, rk4_div: usize,
     let mut new_xs = vec![0.0; n];
 
     let mut min_sign_sq_dist = f64::MAX;
+    let mut min_ssd_i = 0;
 
     for k in 0..steps_used {
         let mut ode_fun = |_t: f64, x: &[f64], dx: &mut [f64]| {
@@ -847,7 +854,10 @@ fn integrate_for_collision(tp: &TrackProblem, steps_used: usize, rk4_div: usize,
         old_xs.copy_from_slice(&new_xs);
 
         let ssd = closest_obj_signed_sq_dist(&tp, new_xs[0], new_xs[2]);
-        min_sign_sq_dist = min_sign_sq_dist.min(ssd);
+        if ssd < min_sign_sq_dist {
+            min_sign_sq_dist = ssd;
+            min_ssd_i = k;
+        }
         if ssd < 0.0 {
             break;
         }
@@ -855,7 +865,7 @@ fn integrate_for_collision(tp: &TrackProblem, steps_used: usize, rk4_div: usize,
 
     x_end.copy_from_slice(&new_xs);
 
-    min_sign_sq_dist
+    (min_sign_sq_dist, min_ssd_i)
 }
 
 fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
@@ -883,8 +893,8 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
     let steps_used = n_steps;
     let mut x_end = vec![0.0; n];
     let mut x_end_check = vec![0.0; n];
-    let min_sign_sq_dist = integrate_for_collision(&tp, steps_used, rk4_div, &ref_controls, &mut x_end);
-    println!("Start min sign sq dist: {:.2}", min_sign_sq_dist);
+    let (mut min_ssd, mut min_ssd_i) = integrate_for_collision(&tp, steps_used, rk4_div, &ref_controls, &mut x_end);
+    println!("Start min sign sq dist: {:.2}, {}", min_ssd, min_ssd_i);
 
     let mut controls = ref_controls.to_vec();
 
@@ -892,13 +902,15 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
 
     let mut changes_made = true;
     let mut epoch = 0;
-    let mut min_ssd = min_sign_sq_dist;
     while changes_made {
         changes_made = false;
 
         println!("\nStarting epoch {}", epoch);
 
         for k in (0..n_steps-1).rev() {
+            if min_ssd < 0.26 {
+                break;
+            }
             if k % 50 == 0 {
                 println!("K: {}", k);
             }
@@ -909,14 +921,15 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
                     controls[n_steps + k] = (controls[n_steps + k] + inc).min(2500.0);
 
                     // is that okay?
-                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
-                    let okay1 = new_min_ssd > 0.25 && new_min_ssd >= min_ssd - 0.05;
-                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
+                    let (new_min_ssd, new_ssd_i) = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                    let okay1 = new_min_ssd > 0.25;
+                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check).0 };
                     if okay1 && check_min_ssd > 0.25 {
                         changes_made = true;
                         min_ssd = new_min_ssd;
+                        min_ssd_i = new_ssd_i;
                         ref_controls[n_steps + k] = controls[n_steps + k];
-                        println!("accel to {:.0}: {:.2}, {:.2}", controls[n_steps + k], min_ssd, check_min_ssd);
+                        println!("accel to {:.0}: {:.2}, {:.2}, {}", controls[n_steps + k], min_ssd, check_min_ssd, min_ssd_i);
 
                         track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
                         // let completion = track_i as f64 / (track_n - 1) as f64 * 100.0;
@@ -939,13 +952,14 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
                         controls[k] = 0.0;
                     }
                     // is that okay?
-                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                    let (new_min_ssd, new_ssd_i) = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
                     let okay1 = new_min_ssd > 0.25 && new_min_ssd >= min_ssd - 0.01;
-                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
+                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check).0 };
                     if okay1 && check_min_ssd > 0.25 {
                         changes_made = true;
                         min_ssd = new_min_ssd;
-                        println!("steering reduced from {:.2} to {:.2}: {:.2}, {:.2}", ref_controls[k], controls[k], min_ssd, check_min_ssd);
+                        min_ssd_i = new_ssd_i;
+                        println!("steering reduced from {:.2} to {:.2}: {:.2}, {:.2}, {}", ref_controls[k], controls[k], min_ssd, check_min_ssd, min_ssd_i);
                         ref_controls[k] = controls[k];
 
                         track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
@@ -962,9 +976,12 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
             }
         }
 
-        for k in (0..n_steps-1).rev() {
+        for k in (0..min_ssd_i).rev() {
             if k % 50 == 0 {
                 println!("Steer k: {}", k);
+            }
+            if min_ssd > 0.5 {
+                break;
             }
 
             // try to increase steering for better clearance
@@ -972,13 +989,14 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
                 while controls[k] != 0.0 && controls[k].abs() < 0.5 && min_ssd < 0.5 {
                     controls[k] = (controls[k] + inc * controls[k].signum()).max(-0.5).min(0.5);
                     // is that okay?
-                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                    let (new_min_ssd, new_ssd_i) = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
                     let okay1 = new_min_ssd >= min_ssd + 0.02;
-                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
+                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check).0 };
                     if okay1 && check_min_ssd > 0.25 {
                         changes_made = true;
                         min_ssd = new_min_ssd;
-                        println!("steering increased for clearance from {:.2} to {:.2}: {:.2}, {:.2}", ref_controls[k], controls[k], min_ssd, check_min_ssd);
+                        min_ssd_i = new_ssd_i;
+                        println!("steering increased for clearance from {:.2} to {:.2}: {:.2}, {:.2}, {}", ref_controls[k], controls[k], min_ssd, check_min_ssd, min_ssd_i);
                         ref_controls[k] = controls[k];
 
                         track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
@@ -996,56 +1014,68 @@ fn refine_solution(tp: TrackProblem, ref_controls: &[f64]) {
         }
 
         // look for steering pairs (opposite signs close together)
-        for diff in 1..40 {
-            println!("Steering diff: {}", diff);
-            for k in 0..n_steps-1-diff {
-                let v1 = controls[k];
-                let v2 = controls[k + diff];
-                if v1 != 0.0 && v1 * v2 < 0.0 {
-                    let remove_amount = v1.abs().min(v2.abs());
-                    controls[k] -= remove_amount * v1.signum();
-                    controls[k + diff] -= remove_amount * v2.signum();
-                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
-                    let okay1 = new_min_ssd > 0.25;
-                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
-                    if okay1 && check_min_ssd > 0.25 {
-                        changes_made = true;
-                        min_ssd = new_min_ssd;
-                        ref_controls[k] = controls[k];
-                        ref_controls[k + diff] = controls[k + diff];
-                        println!("steering pair {} apart at k {} ({:.2}, {:.2}) reduced: {:.2}, {:.2}", diff, k, v1, v2, min_ssd, check_min_ssd);
-                        track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
-                    } else {
-                        controls[k] = ref_controls[k];
-                        controls[k + diff] = ref_controls[k + diff];
+        if !changes_made || epoch % 4 == 0 {
+            for diff in 1..40 {
+                if min_ssd < 0.26 {
+                    break;
+                }
+                println!("Steering diff: {}", diff);
+                for k in 0..n_steps-1-diff {
+                    let v1 = controls[k];
+                    let v2 = controls[k + diff];
+                    if v1 != 0.0 && v1 * v2 < 0.0 {
+                        let remove_amount = v1.abs().min(v2.abs());
+                        controls[k] -= remove_amount * v1.signum();
+                        controls[k + diff] -= remove_amount * v2.signum();
+                        let (new_min_ssd, new_ssd_i) = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                        let okay1 = new_min_ssd > 0.25;
+                        let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check).0 };
+                        if okay1 && check_min_ssd > 0.25 {
+                            changes_made = true;
+                            min_ssd = new_min_ssd;
+                            min_ssd_i = new_ssd_i;
+                            ref_controls[k] = controls[k];
+                            ref_controls[k + diff] = controls[k + diff];
+                            println!("steering pair {} apart at k {} ({:.2}, {:.2}) reduced: {:.2}, {:.2}, {}", diff, k, v1, v2, min_ssd, check_min_ssd, min_ssd_i);
+                            track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
+                        } else {
+                            controls[k] = ref_controls[k];
+                            controls[k + diff] = ref_controls[k + diff];
+                        }
                     }
                 }
             }
         }
 
         // look for accel pairs (opposite signs close together)
-        for diff in 1..40 {
-            println!("Accel diff: {}", diff);
-            for k in 0..n_steps-1-diff {
-                let v1 = controls[n_steps + k];
-                let v2 = controls[n_steps + k + diff];
-                if v1 != 0.0 && v1 * v2 < 0.0 {
-                    let remove_amount = v1.abs().min(v2.abs());
-                    controls[n_steps + k] -= remove_amount * v1.signum();
-                    controls[n_steps + k + diff] -= remove_amount * v2.signum();
-                    let new_min_ssd = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
-                    let okay1 = new_min_ssd > 0.25;
-                    let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check) };
-                    if okay1 && check_min_ssd > 0.25 {
-                        changes_made = true;
-                        min_ssd = new_min_ssd;
-                        ref_controls[n_steps + k] = controls[n_steps + k];
-                        ref_controls[n_steps + k + diff] = controls[n_steps + k + diff];
-                        println!("accel pair {} apart at k {} ({:.2}, {:.2}) reduced: {:.2}, {:.2}", diff, k, v1, v2, min_ssd, check_min_ssd);
-                        track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
-                    } else {
-                        controls[n_steps + k] = ref_controls[n_steps + k];
-                        controls[n_steps + k + diff] = ref_controls[n_steps + k + diff];
+        if !changes_made || epoch % 4 == 0 {
+            for diff in 1..40 {
+                if min_ssd < 0.26 {
+                    break;
+                }
+                println!("Accel diff: {}", diff);
+                for k in 0..n_steps-1-diff {
+                    let v1 = controls[n_steps + k];
+                    let v2 = controls[n_steps + k + diff];
+                    if v1 != 0.0 && v1 * v2 < 0.0 {
+                        let remove_amount = v1.abs().min(v2.abs());
+                        controls[n_steps + k] -= remove_amount * v1.signum();
+                        controls[n_steps + k + diff] -= remove_amount * v2.signum();
+                        let (new_min_ssd, new_ssd_i) = integrate_for_collision(&tp, steps_used, rk4_div, &controls, &mut x_end);
+                        let okay1 = new_min_ssd > 0.25;
+                        let check_min_ssd = if okay1 { new_min_ssd } else { integrate_for_collision(&tp, steps_used, rk4_div*2, &controls, &mut x_end_check).0 };
+                        if okay1 && check_min_ssd > 0.25 {
+                            changes_made = true;
+                            min_ssd = new_min_ssd;
+                            min_ssd_i = new_ssd_i;
+                            ref_controls[n_steps + k] = controls[n_steps + k];
+                            ref_controls[n_steps + k + diff] = controls[n_steps + k + diff];
+                            println!("accel pair {} apart at k {} ({:.2}, {:.2}) reduced: {:.2}, {:.2}, {}", diff, k, v1, v2, min_ssd, check_min_ssd, min_ssd_i);
+                            track_i = next_track_idx(track_i, ref_x, ref_y, x_end[0], x_end[2]);
+                        } else {
+                            controls[n_steps + k] = ref_controls[n_steps + k];
+                            controls[n_steps + k + diff] = ref_controls[n_steps + k + diff];
+                        }
                     }
                 }
             }
