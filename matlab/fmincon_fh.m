@@ -2,6 +2,7 @@ function X = fmincon_fh(x_ic, dt, TestTrack, XObs, obs)
 horizon = 90;
 take = 10;
 X = zeros(1,8);
+X(1,1:6) = x_ic;
 % figure;
 % hold on;
 X_ic = potential_fields_euler_cons(x_ic, horizon, TestTrack, XObs);
@@ -17,22 +18,30 @@ h = plot(plot_x, plot_y, '.');
 h.XDataSource = 'plot_x';
 h.YDataSource = 'plot_y';
 drawnow;
+Fx_scale = 1000;
 
     
 for i=1:take:1000
     disp(i);
     X_fh = fmincon_full_state(X_ic, dt, x_ic, TestTrack, obs, obj_fun);
+    X(i:i+take-1,7) = X_fh(7:8:8*(take-1)+7);
+    X(i:i+take-1,8) = X_fh(8:8:8*(take-1)+8);
     for j=0:take-1
-        X(i+j,:) = X_fh(8*j+1:8*j+8);
+        controls = X(i+j,7:8);
+        controls(2) = Fx_scale*controls(2);
+        state = X(i+j,1:6);
+        X(i + j + 1,1:6) = rk4_integrate(state', controls', dt, 4);%X_fh(8*j+1:8*j+8);
     end
-    x_ic = X_fh(8*take + 1:8*take+6)';
+    x_ic = X(i + take,1:6)';
 
     X_ic = zeros(horizon + 1, 8);
     X_ic(1:horizon + 1 - take,:) = reshape(X_fh(8*take+1:end), 8, [])';
     end_controls = X_ic(horizon - take,7:8);
-    X_ic(horizon-take + 1:horizon+1,7:8) = repelem(end_controls, 11, 1);
+    X_ic(horizon-take + 1:horizon+1,7:8) = repelem(end_controls, take+1, 1);
+    
+    end_controls(2) = Fx_scale*end_controls(2);
     for j=1:take
-        X_ic(horizon-take+j+1,1:6) = X_ic(horizon-take+j,1:6) + dt*nonl_bike(X_ic(horizon-take+j,1:8))';
+        X_ic(horizon-take+j+1,1:6) = rk4_integrate(X_ic(horizon-take+j,1:6)', end_controls', dt, 4);
     end
   
 %     plot(X_ic(:,1), X_ic(:,3), '.');
