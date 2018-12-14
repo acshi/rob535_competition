@@ -1,5 +1,5 @@
-%load TestTrack.mat
-%load fmincon_fh_90s_horizon2_post_done.mat
+load TestTrack.mat
+load fmincon_fh_90s_horizon_rk4_2.mat
 
 x_ic = [287,5,-176,0,2,0];
 dt = 0.1;
