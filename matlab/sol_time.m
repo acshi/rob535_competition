@@ -1,4 +1,7 @@
 function [t, grad] = sol_time(X, TestTrack, dt)
+t = 0;
+grad = zeros(size(X));
+return;
 %tic;
 
 if nargin == 2

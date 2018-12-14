@@ -8,13 +8,14 @@ for i=1:(nSteps-1)
     x = X(8*i-7:8*i-2);
     u = X(8*i-1:8*i);
     u(2) = Fx_scale*u(2);
+    x1 = rk4_integrate(x, u, dt, 4);
+    C(6*i-5:6*i) = X(8*i+1:8*i+6) - x1;
     
     k1 = nonl_bike([x; u]);
     k2 = nonl_bike([x + 0.5*dt*k1; u]);
     k3 = nonl_bike([x + 0.5*dt*k2; u]);
     k4 = nonl_bike([x + dt*k3; u]);
     x1 = x + (dt/6)*(k1 + 2*k2 + 2*k3 + k4);
-    C(6*i-5:6*i) = X(8*i+1:8*i+6) - x1;
     
     dC(6*i-5:6*i, 8*i+1:8*i+6) = eye(6);
     [A1, B1] = getDerivatives(x, u);
