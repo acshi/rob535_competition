@@ -6,10 +6,10 @@ pub use crate::lib::solve_obstacle_problem;
 use crate::lib::*;
 
 fn main() {
-    if false {
+    if true {
         run_problem1();
     }
-    if true {
+    if false {
         run_refine_solution();
     }
 }

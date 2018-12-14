@@ -1,12 +1,14 @@
-addpath('./SimPkg_F18_V1');
+addpath('./SimPkg_F18_V2');
+addpath('./rob535submission2');
 
 load 'TestTrack.mat';
 Xobs = generateRandomObstacles(10);
+tic;
 U_short = ROB599_ControlsProject2_part2_Team5(TestTrack, Xobs);
+toc
 U = U_short;
 % U = repelem(U_short, 5, 1);
-x0 = [287; 5; -176; 0; 2; 0];
-[Y, ~] = forwardIntegrateControlInput(U, x0);
+[Y, ~] = forwardIntegrateControlInput2(U);
 info = getTrajectoryInfo(Y, U, Xobs, TestTrack);
 close all;
 plot(Y(:, 1), Y(:, 3));
