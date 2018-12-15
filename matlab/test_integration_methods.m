@@ -1,5 +1,5 @@
 x_ic = [287,5,-176,0,2,0];
-%load fmincon_fh_90s_horizon2_post_done.mat
+%load fmincon_fh_90s_horizon_rk4_3.mat
 
 figure;
 hold on;

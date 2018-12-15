@@ -10,7 +10,7 @@ for i=1:(nSteps-1)
     x = X(8*i-7:8*i-2);
     u = X(8*i-1:8*i);
     u(2) = Fx_scale*u(2);
-    [x1_4, dx0_4, du_4] = rk4_integrate(x, u, dt, 4);
+    [x1_4, dx0_4, du_4] = rk4_integrate(x, u, dt, 8);
     du_4(:,2) = Fx_scale*du_4(:,2);
         
     C(6*i-5:6*i) = X(8*i+1:8*i+6) - x1_4;
@@ -18,11 +18,11 @@ for i=1:(nSteps-1)
     dC(6*i-5:6*i, 8*i-7:8*i-2) = -dx0_4;
     dC(6*i-5:6*i, 8*i-1:8*i) = -du_4;
     
-    [x1_2, dx0_2, du_2] = rk4_integrate(x, u, dt, 2);
+    [x1_2, dx0_2, du_2] = rk4_integrate(x, u, dt, 4);
     du_2(:,2) = Fx_scale*du_2(:,2);
 
-    scale = 1e8;
-    Cineq(6*i-5:6*i) = scale*(x1_4 - x1_2).^2 - 1e-8;
+    scale = 1e7;
+    Cineq(6*i-5:6*i) = scale*((x1_4 - x1_2).^2 - 1e-7);
     dCineq(6*i-5:6*i, 8*i-7:8*i-2) = scale*2*(x1_4-x1_2).*(dx0_4 - dx0_2);
     dCineq(6*i-5:6*i, 8*i-1:8*i) = scale*2*(x1_4-x1_2).*(du_4 - du_2);
 end

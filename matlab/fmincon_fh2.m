@@ -30,7 +30,7 @@ for i=1:take:1000
         controls = X(i+j,7:8);
         controls(2) = Fx_scale*controls(2);
         state = X(i+j,1:6);
-        X(i + j + 1,1:6) = rk4_integrate(state', controls', dt, 4);%X_fh(8*j+1:8*j+8);
+        X(i + j + 1,1:6) = rk4_integrate(state', controls', dt, 8);%X_fh(8*j+1:8*j+8);
     end
     x_ic = X(i + take,1:6)';
 
@@ -41,7 +41,7 @@ for i=1:take:1000
     
     end_controls(2) = Fx_scale*end_controls(2);
     for j=1:take
-        X_ic(horizon-take+j+1,1:6) = rk4_integrate(X_ic(horizon-take+j,1:6)', end_controls', dt, 4);
+        X_ic(horizon-take+j+1,1:6) = rk4_integrate(X_ic(horizon-take+j,1:6)', end_controls', dt, 8);
     end
   
 %     plot(X_ic(:,1), X_ic(:,3), '.');
