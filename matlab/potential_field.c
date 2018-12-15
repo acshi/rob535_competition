@@ -7,8 +7,8 @@ extern void potential_fields(
         double* cline,
         double* theta,
         int len,
-        //double* XObs,
-        //int nObs,
+        double* XObs,
+        int nObs,
         double* u,
         int* u_len);
 
@@ -17,11 +17,11 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     double* br;
     double* cline;
     double* theta;
-    double* obstacles;
+    double* XObs;
 
     mwSize elements;
 
-    if (nrhs != 4) {
+    if (nrhs != 5) {
         mexErrMsgTxt("Wrong number of input args");
     }
 
@@ -34,14 +34,14 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     br = mxGetPr(prhs[1]);
     cline = mxGetPr(prhs[2]);
     theta = mxGetPr(prhs[3]);
-    //XObs = mxGetPr(prhs[4]);
+    XObs = mxGetPr(prhs[4]);
 
     int len = mxGetN(prhs[0]);
-    //nObs = mxGetM(prhs[4]);
+    int nObs = mxGetM(prhs[4])/8;
 
     double* u = malloc(8000*sizeof(double));
     int u_len = 0;
-    potential_fields(bl, br, cline, theta, len, /*XObs, nObs,*/ u, &u_len);
+    potential_fields(bl, br, cline, theta, len, XObs, nObs, u, &u_len);
 
     mexPrintf("Length: %d\n", u_len);
     plhs[0] = mxCreateDoubleMatrix(2, u_len/2, mxREAL);

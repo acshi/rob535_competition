@@ -38,7 +38,16 @@ fn boundary_electric_force(x: Pt, boundary: &Pts) -> Pt {
     for i in 0..boundary.len() - 1 {
         force += electric_force_line_charge(x, boundary[i], boundary[i+1]);
     }
-    force /= (boundary.len() - 1) as f64;
+    force
+}
+
+fn obstacle_force(x: Pt, obs: &Pts) -> Pt {
+    let mut force = Vector2::new(0., 0.);
+    for i in 0..obs.len()/4 {
+        for j in 0..4 {
+            force += electric_force_line_charge(x, obs[4*i + j], obs[4*i + ((j + 1) % 4)]);
+        }
+    }
     force
 }
 
@@ -54,20 +63,19 @@ fn goal_force(x: Pt, cline: &Pts) -> Pt {
     }
    let dir = cline[idx+1] - cline[idx];
    let dir = dir.normalize();
-   //10.*dir
-   dir/100.
+   dir
 }
 
-fn electric_force(x: Pt, bl: &Pts, br: &Pts, cline: &Pts) -> Pt {
+fn electric_force(x: Pt, bl: &Pts, br: &Pts, cline: &Pts, obs: &Pts) -> Pt {
     let mut force = Vector2::new(0f64, 0f64);
     force += boundary_electric_force(x, bl);
     force += boundary_electric_force(x, br);
-    // force += obstacles...
+    force += obstacle_force(x, obs);
     force += goal_force(x, cline);
     force
 }
 
-fn plot_electric_force(bl: &Pts, br: &Pts, cline: &Pts) {
+fn plot_electric_force(bl: &Pts, br: &Pts, cline: &Pts, obs: &Pts) {
     let mut bl_x = Vec::new();
     let mut bl_y = Vec::new();
     let mut br_x = Vec::new();
@@ -82,7 +90,7 @@ fn plot_electric_force(bl: &Pts, br: &Pts, cline: &Pts) {
             let a1 = (j + 1) as f64/(num_points + 1) as f64;
             let a2 = (num_points - j) as f64/(num_points + 1) as f64;
             let pos = a1*bl[i] + a2*br[i];
-            let force = electric_force(pos, bl, br, cline);
+            let force = electric_force(pos, bl, br, cline, obs);
             x.push(pos[0]);
             y.push(pos[1]);
             //x.push(bl[i][0]);
@@ -118,7 +126,7 @@ fn plot_traj(traj: &Vec<Vector6<f64>>, bl: &Pts, br: &Pts) {
     let mut br_y = Vec::new();
     let mut xs = Vec::new();
     let mut ys = Vec::new();
-    for i in 0..2000 {
+    for i in 0..traj.len() {
         xs.push(traj[i][0]);
         ys.push(traj[i][2]);
     }
@@ -145,6 +153,11 @@ fn test_traj() {
     let mut cl : Pts = Vec::new();
     let mut theta : Vec<f64> = Vec::new();
 
+    let mut obs: Pts = vec![Vector2::new(10.,1.),
+                                Vector2::new(10.,-1.),
+                                Vector2::new(12.,-1.),
+                                Vector2::new(12.,1.)];
+
     for i in 0..20 {
         bl.push(Vector2::new(1.*i as f64, -5.));
         br.push(Vector2::new(1.*i as f64, 5.));
@@ -154,15 +167,15 @@ fn test_traj() {
 
 
     let x = Vector6::new(0., 0., 0., 0., 3.14/4., 0.);
-    let (traj, us) = potential_fields_actual(&x, &bl, &br, &cl, &theta);
-    println!("{} {} {} {} {}", us[0], us[1], us[2], us[3], us[4]);
-    println!("{} {} {} {} {}", traj[0], traj[1], traj[2], traj[3], traj[4]);
-    plot_electric_force(&bl, &br, &cl);
-    plot_traj(&traj, &bl, &br);
+    let (traj, us) = potential_fields_actual(&x, &bl, &br, &cl, &theta, &obs);
+    //println!("{} {} {} {} {}", us[0], us[1], us[2], us[3], us[4]);
+    //println!("{} {} {} {} {}", traj[0], traj[1], traj[2], traj[3], traj[4]);
+    plot_electric_force(&bl, &br, &cl, &obs);
+    //plot_traj(&traj, &bl, &br);
 }
 
 
-fn potential_fields_actual(x0: &Vector6<f64>, bl: &Pts, br: &Pts, cline: &Pts, theta: &[f64]) -> (Vec<Vector6<f64>>, Pts) {
+fn potential_fields_actual(x0: &Vector6<f64>, bl: &Pts, br: &Pts, cline: &Pts, theta: &[f64], obs: &Pts) -> (Vec<Vector6<f64>>, Pts) {
     //plot_electric_force(bl, br, cline);
     let mut x = x0.clone();
     let mut xs = Vec::new();
@@ -179,9 +192,11 @@ fn potential_fields_actual(x0: &Vector6<f64>, bl: &Pts, br: &Pts, cline: &Pts, t
     //let dt = 0.01;
     let dt = 0.1;
 
+    let lookahead = 8.;
+
     for i in 0..2000 {
         xs.push(x);
-        let force = electric_force(Vector2::new(x[0], x[2]), bl, br, cline).normalize();
+        let force = electric_force(Vector2::new(x[0], x[2]) + Vector2::new(lookahead*x[4].cos(), lookahead*x[4].sin()), bl, br, cline, obs).normalize();
         let dir = Vector2::new(x[4].cos(), x[4].sin());
         let cos = dir.dot(&force);
         let sin = force[0]*dir[1] - force[1]*dir[0];
@@ -203,10 +218,18 @@ fn potential_fields_actual(x0: &Vector6<f64>, bl: &Pts, br: &Pts, cline: &Pts, t
 
         us.push(Vector2::new(delta, f_x));
         //let ode_fun/*: FnMut(&Vector6<f64>) -> Vector6<f64>*/ = |x| bike_fun(x, delta, f_x);
-        x = rk4_integrate(dt/100., 100, |x| bike_fun(x, delta, f_x), &x);
+        x = rk4_integrate(dt/8., 8, |x| bike_fun(x, delta, f_x), &x);
         //let y = Vector6::zeros();
         //let f = |z: Vector6<f64>| z.clone();
         //let v = test(|z: &Vector6<f64>| z.clone(), &y);
+        let end_line = br[br.len() - 1] - bl[bl.len() - 1];
+        let x_pos = Vector2::new(x[0], x[2]);
+        let offset = x_pos - bl[bl.len() - 1];
+        if end_line[0]*offset[1] - end_line[1]*offset[0] > 0. {
+            xs.push(x);
+            us.push(Vector2::new(delta, f_x));
+            break;
+        }
     }
     (xs, us)
 }
@@ -336,8 +359,8 @@ pub extern "C" fn potential_fields(bl: *mut c_double,
                                cline: *mut c_double,
                                theta: *mut c_double,
                                len: c_int,
-                               //XObs: *mut c_double,
-                               //nObs: c_int,
+                               XObs: *mut c_double,
+                               nObs: c_int,
                                u: *mut c_double,
                                u_len: *mut c_int) {
     let len = len as usize;
@@ -347,10 +370,12 @@ pub extern "C" fn potential_fields(bl: *mut c_double,
     let theta = unsafe {
         slice::from_raw_parts(theta, len)
     };
-    ////XObs = ...
+    let nObs = nObs as usize;
+    let obs = convert(XObs, nObs*4);
+    //let obs: Pts = Vec::new();
 
     let x = Vector6::new(287., 5., -176., 0., 2., 0.);
-    let (traj, u_rust) = potential_fields_actual(&x, &bl, &br, &cline, &theta);
+    let (traj, u_rust) = potential_fields_actual(&x, &bl, &br, &cline, &theta, &obs);
     //plot_electric_force(&bl, &br, &cline);
     plot_traj(&traj, &bl, &br);
     let u_rust: Vec<f64> = u_rust.iter().flat_map(|pt| pt.iter()).map(|r| *r).collect();
