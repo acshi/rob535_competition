@@ -9,6 +9,8 @@ mod lib;
 pub use lib::trajectory_for_obstacles;
 use lib::*;
 
+extern crate potential_field;
+
 fn main() {
     if false {
         quadprog_test();
@@ -18,7 +20,7 @@ fn main() {
     if false {
         lqr_test();
     }
-    if true {
+    if false {
         mpc_test();
     }
     if false {
