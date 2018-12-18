@@ -27,6 +27,8 @@ h = plot(plot_x, plot_y, '.');
 h.XDataSource = 'plot_x';
 h.YDataSource = 'plot_y';
 drawnow;
+
+
 Fx_scale = 1000;
 
     
