@@ -225,8 +225,8 @@ pub fn test_traj() {
 fn potential_fields_actual(x0: &Vector6<f64>, bl: &Pts, br: &Pts, cline: &Pts, theta: &[f64], obs: &Pts) -> (Vec<Vector6<f64>>, Pts) {
     //plot_electric_force(bl, br, cline);
     let mut x = x0.clone();
-    let mut xs = Vec::new();
-    let mut us = Vec::new();
+    let mut xs = Vec::with_capacity(2000);
+    let mut us = Vec::with_capacity(2000);
 
     let k_psi = 10.;
     let k_u = 1000.;
@@ -265,7 +265,7 @@ fn potential_fields_actual(x0: &Vector6<f64>, bl: &Pts, br: &Pts, cline: &Pts, t
 
         us.push(Vector2::new(delta, f_x));
         //let ode_fun/*: FnMut(&Vector6<f64>) -> Vector6<f64>*/ = |x| bike_fun(x, delta, f_x);
-        x = rk4_integrate(dt/8., 8, |x| bike_fun(x, delta, f_x), &x);
+        x = rk4_integrate(dt/4., 4, |x| bike_fun(x, delta, f_x), &x);
         //let y = Vector6::zeros();
         //let f = |z: Vector6<f64>| z.clone();
         //let v = test(|z: &Vector6<f64>| z.clone(), &y);
