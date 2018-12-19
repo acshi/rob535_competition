@@ -8,9 +8,19 @@ use std::mem;
 use std::io::Write;
 use std::f64;
 use std::cmp::min;
+use std::fs::File;
+use std::io::Read;
 
 type Pt = Vector2<f64>;
 type Pts = Vec<Pt>;
+
+// https://github.com/itchyny/fastinvsqrt/blob/master/src/rust/fastinvsqrt.rs
+fn fast_inv_sqrt(x: f32) -> f32 {
+    let i: u32 = unsafe { std::mem::transmute(x) };
+    let j = 0x5f3759df - (i >> 1);
+    let y: f32 = unsafe { std::mem::transmute(j) };
+    y * (1.5 - 0.5 * x * y * y)
+}
 
 fn electric_force_line_charge(x: Pt, p0: Pt, p1: Pt) -> Pt {
     let dir = p1 - p0;
@@ -22,13 +32,13 @@ fn electric_force_line_charge(x: Pt, p0: Pt, p1: Pt) -> Pt {
     let h = perp.norm();
     let u_perp = perp/h;
     let b = L - a;
-    let hyp_a_1 = (a*a + h*h).sqrt();
-    let sin_a_1 = a/hyp_a_1;
-    let cos_a_1 = h/hyp_a_1;
+    let hyp_a_1_inv = fast_inv_sqrt((a*a + h*h) as f32) as f64;
+    let sin_a_1 = a*hyp_a_1_inv;
+    let cos_a_1 = h*hyp_a_1_inv;
 
-    let hyp_a_2 = (b*b + h*h).sqrt();
-    let sin_a_2 = b/hyp_a_2;
-    let cos_a_2 = h/hyp_a_2;
+    let hyp_a_2_inv = fast_inv_sqrt((b*b + h*h) as f32) as f64;
+    let sin_a_2 = b*hyp_a_2_inv;
+    let cos_a_2 = h*hyp_a_2_inv;
 
     (1f64/h)*(u_perp*(sin_a_1 + sin_a_2) + u_par*(-cos_a_1 + cos_a_2))
 }
@@ -146,32 +156,69 @@ fn plot_traj(traj: &Vec<Vector6<f64>>, bl: &Pts, br: &Pts) {
     p.wait().unwrap();
 }
 
-#[test]
-fn test_traj() {
-    let mut bl : Pts = Vec::new();
-    let mut br : Pts = Vec::new();
-    let mut cl : Pts = Vec::new();
-    let mut theta : Vec<f64> = Vec::new();
+fn is_float_digit(c: char) -> bool {
+    return c.is_numeric() || c == '.' || c == '-';
+}
 
-    let mut obs: Pts = vec![Vector2::new(10.,1.),
-                                Vector2::new(10.,-1.),
-                                Vector2::new(12.,-1.),
-                                Vector2::new(12.,1.)];
+fn fill_from_csv(filename: &str, vals: &mut [f64]) -> std::io::Result<()> {
+    let mut f = File::open(filename)?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf)?;
 
-    for i in 0..20 {
-        bl.push(Vector2::new(1.*i as f64, -5.));
-        br.push(Vector2::new(1.*i as f64, 5.));
-        cl.push((bl[i] + br[i]) / 2.);
-        theta.push(0.);
+    let mut buf_i = 0;
+    for i in 0..vals.len() {
+        let mut next_nondigit = buf_i;
+        while is_float_digit(buf[next_nondigit] as char) {
+            next_nondigit += 1;
+        }
+        vals[i] = String::from_utf8(buf[buf_i..next_nondigit].to_owned()).unwrap().parse().unwrap();
+        buf_i = next_nondigit;
+        while buf_i < buf.len() && !is_float_digit(buf[buf_i] as char) {
+            buf_i += 1;
+        }
     }
 
+    Ok(())
+}
 
-    let x = Vector6::new(0., 0., 0., 0., 3.14/4., 0.);
-    let (traj, us) = potential_fields_actual(&x, &bl, &br, &cl, &theta, &obs);
+fn load_test_track() -> (Pts, Pts, Pts, Vec<f64>) {
+    let track_n = 246;
+    let mut bl = vec![0.0; 2 * track_n];
+    let mut br = vec![0.0; 2 * track_n];
+    let mut cline = vec![0.0; 2 * track_n];
+    let mut theta = vec![0.0; track_n];
+    fill_from_csv("bl.csv", &mut bl).unwrap();
+    fill_from_csv("br.csv", &mut br).unwrap();
+    fill_from_csv("cline.csv", &mut cline).unwrap();
+    fill_from_csv("theta.csv", &mut theta).unwrap();
+
+    let mut bl_pts = Pts::new();
+    let mut br_pts = Pts::new();
+    let mut cline_pts = Pts::new();
+    for i in 0..track_n {
+        bl_pts.push(Vector2::new(bl[i], bl[track_n + i]));
+        br_pts.push(Vector2::new(br[i], br[track_n + i]));
+        cline_pts.push(Vector2::new(cline[i], cline[track_n + i]));
+    }
+
+    (bl_pts, br_pts, cline_pts, theta)
+}
+
+pub fn test_traj() {
+    let (bl, br, cl, theta) = load_test_track();
+
+    // let mut obs: Pts = vec![Vector2::new(10.,1.),
+    //                         Vector2::new(10.,-1.),
+    //                         Vector2::new(12.,-1.),
+    //                         Vector2::new(12.,1.)];
+
+
+    let x = Vector6::new(287., 5., -176., 0., 2., 0.);
+    let (traj, us) = potential_fields_actual(&x, &bl, &br, &cl, &theta, &Pts::new());
     //println!("{} {} {} {} {}", us[0], us[1], us[2], us[3], us[4]);
     //println!("{} {} {} {} {}", traj[0], traj[1], traj[2], traj[3], traj[4]);
-    plot_electric_force(&bl, &br, &cl, &obs);
-    //plot_traj(&traj, &bl, &br);
+    // plot_electric_force(&bl, &br, &cl, &obs);
+    // plot_traj(&traj, &bl, &br);
 }
 
 

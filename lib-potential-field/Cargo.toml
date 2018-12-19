@@ -10,5 +10,4 @@ nalgebra = "0.16.0"
 [lib]
 name = "potential_field"
 path = "src/potential_field.rs"
-crate-type=["staticlib"]
-
+# crate-type=["staticlib"]
