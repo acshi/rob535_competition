@@ -1,4 +1,7 @@
-function [sol, exitflag, output] = fmincon_improve_traj(X_init, dt, x_start, x_end, obs, obj_fun)
+function [sol, exitflag, output] = fmincon_improve_traj(X_init, dt, x_start, x_end, obs, obj_fun, nIter)
+if nargin < 7
+    nIter = 100;
+end
 Fx_scale = 1000;
 % TODO provide gradients
 problem.solver = 'fmincon';
@@ -39,7 +42,7 @@ problem.options = optimoptions('fmincon',...
     'SpecifyObjectiveGradient', true,...
     'SpecifyConstraintGradient', true,...
     'MaxFunctionEvaluations', 6000,...
-    'MaxIterations', 300,...
+    'MaxIterations', nIter,...
     'CheckGradients', false,...
     'ConstraintTolerance', 1e-8);%    ,    'FiniteDifferenceType', 'central'
 [h, g, dh, dg] = problem.nonlcon(problem.x0);
@@ -52,7 +55,7 @@ s0 = problem.objective(problem.x0);
         dC = -dC';
         %C = [];
         %dC = [];
-        [Ceq, dCeq] = rk4_cons(x, dt);
+        [Ceq, dCeq] = rk4_cons(x, dt, 16);
         dCeq = dCeq';
     end
 end

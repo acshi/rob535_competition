@@ -39,7 +39,8 @@ problem.options = optimoptions('fmincon',...
     'SpecifyConstraintGradient', true,...
     'MaxFunctionEvaluations', 6000,...%    'MaxIterations', 0,...
     'CheckGradients', false,...
-    'OptimalityTolerance', 1e-6);%    ,    'FiniteDifferenceType', 'central'
+    'OptimalityTolerance', 1e-6,...
+    'ConstraintTolerance', 1e-8);%    ,    'FiniteDifferenceType', 'central'
 [h, g, dh, dg] = problem.nonlcon(problem.x0);
 s0 = problem.objective(problem.x0);
 sol = fmincon(problem);
@@ -50,7 +51,7 @@ sol = fmincon(problem);
         dC = -dC';
         %C = [];
         %dC = [];
-        [Ceq, dCeq] = rk4_cons(x, dt);
+        [Ceq, dCeq] = rk4_cons(x, dt, 16);
         dCeq = dCeq';
     end
 end

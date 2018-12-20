@@ -3,43 +3,45 @@ x_ic = [287,5,-176,0,2,0];
 
 figure;
 hold on;
+plot(TestTrack.bl(1,:), TestTrack.bl(2,:));
+plot(TestTrack.br(1,:), TestTrack.br(2,:));
 
 %X = reshape(X, 8, [])';
 U1 = X(:,7:8);
 U1(:,2) = 1000*U1(:,2);
 
-tic;
-X11 = zeros(size(U1,1) + 1, 6);
-X11(1,:) = x_ic;
-for i=1:size(U1,1)
-    X11(i + 1,:) = rk4_integrate(X11(i,:)', U1(i,:)', 0.1, 1);
-end
-fprintf("rk4-1 took %f\n", toc);
-plot(X11(:,1), X11(:,3), '.', 'DisplayName', 'rk4-1');
-drawnow;
+% tic;
+% X11 = zeros(size(U1,1) + 1, 6);
+% X11(1,:) = x_ic;
+% for i=1:size(U1,1)
+%     X11(i + 1,:) = rk4_integrate(X11(i,:)', U1(i,:)', 0.1, 1);
+% end
+% fprintf("rk4-1 took %f\n", toc);
+% plot(X11(:,1), X11(:,3), '.', 'DisplayName', 'rk4-1');
+% drawnow;
 
-tic;
-X4 = zeros(size(U1,1) + 1, 6);
-X4(1,:) = x_ic;
-for i=1:size(U1,1)
-    X4(i + 1,:) = rk4_integrate(X4(i,:)', U1(i,:)', 0.1, 2);
-end
-fprintf("rk4-2 took %f\n", toc);
-legend;
-plot(X4(:,1), X4(:,3), '.', 'DisplayName', 'rk4-2');
-drawnow;
+% tic;
+% X4 = zeros(size(U1,1) + 1, 6);
+% X4(1,:) = x_ic;
+% for i=1:size(U1,1)
+%     X4(i + 1,:) = rk4_integrate(X4(i,:)', U1(i,:)', 0.1, 2);
+% end
+% fprintf("rk4-2 took %f\n", toc);
+% legend;
+% plot(X4(:,1), X4(:,3), '.', 'DisplayName', 'rk4-2');
+% drawnow;
 
 
-tic;
-X1 = zeros(size(U1,1) + 1, 6);
-X1(1,:) = x_ic;
-for i=1:size(U1,1)
-    X1(i + 1,:) = rk4_integrate(X1(i,:)', U1(i,:)', 0.1, 4);
-end
-fprintf("rk4-4 took %f\n", toc);
-plot(X1(:,1), X1(:,3), '.', 'DisplayName', 'rk4-4');
-legend;
-drawnow;
+% tic;
+% X1 = zeros(size(U1,1) + 1, 6);
+% X1(1,:) = x_ic;
+% for i=1:size(U1,1)
+%     X1(i + 1,:) = rk4_integrate(X1(i,:)', U1(i,:)', 0.1, 4);
+% end
+% fprintf("rk4-4 took %f\n", toc);
+% plot(X1(:,1), X1(:,3), '.', 'DisplayName', 'rk4-4');
+% legend;
+% drawnow;
 
 tic;
 X5 = zeros(size(U1,1) + 1, 6);
@@ -61,6 +63,28 @@ for i=1:size(U1,1)
 end
 fprintf("rk4-16 took %f\n", toc);
 plot(X13(:,1), X13(:,3), '.', 'DisplayName', 'rk4-16');
+legend;
+drawnow;
+
+tic;
+X21 = zeros(size(U1,1) + 1, 6);
+X21(1,:) = x_ic;
+for i=1:size(U1,1)
+    X21(i + 1,:) = rk4_integrate(X21(i,:)', U1(i,:)', 0.1, 32);
+end
+fprintf("rk4-32 took %f\n", toc);
+plot(X21(:,1), X21(:,3), '.', 'DisplayName', 'rk4-32');
+legend;
+drawnow;
+
+tic;
+X22 = zeros(size(U1,1) + 1, 6);
+X22(1,:) = x_ic;
+for i=1:size(U1,1)
+    X22(i + 1,:) = rk4_integrate(X22(i,:)', U1(i,:)', 0.1, 64);
+end
+fprintf("rk4-64 took %f\n", toc);
+plot(X22(:,1), X22(:,3), '.', 'DisplayName', 'rk4-64');
 legend;
 drawnow;
 
