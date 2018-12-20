@@ -45,7 +45,7 @@ s0 = problem.objective(problem.x0);
 sol = fmincon(problem);
 
     function [C, Ceq,  dC, dCeq] = nonlcon(x)
-        [C, dC] = dist_to_obj(x, obs, 0.1);
+        [C, dC] = dist_to_obj(x, obs, 0.2);
         C = -C;
         dC = -dC';
         %C = [];
