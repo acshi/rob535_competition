@@ -424,7 +424,7 @@ pub extern "C" fn potential_fields(bl: *mut c_double,
     let x = Vector6::new(287., 5., -176., 0., 2., 0.);
     let (traj, u_rust) = potential_fields_actual(&x, &bl, &br, &cline, &theta, &obs);
     //plot_electric_force(&bl, &br, &cline);
-    plot_traj(&traj, &bl, &br);
+    //plot_traj(&traj, &bl, &br);
     let u_rust: Vec<f64> = u_rust.iter().flat_map(|pt| pt.iter()).map(|r| *r).collect();
 
     unsafe {
